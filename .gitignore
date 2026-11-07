@@ -1,0 +1,43 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables & secrets (CRITICAL: Never commit .env)
+.env
+*.env
+!.env.example
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Workspace sandbox temporary files (keep directory tracked)
+workspace_sandbox/*
+!workspace_sandbox/.gitkeep
+
+# IDE & Editor folders
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
