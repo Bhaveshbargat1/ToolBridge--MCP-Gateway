@@ -43,10 +43,10 @@
 - [x] SQL Security penetration test suite (29 security tests passing)
 
 ### Phase 4: Dynamic Tool Router & Downstream MCP Server
-- [ ] Tool Router (namespace resolution, dispatching, execution metrics)
-- [ ] Downstream MCP Server using MCP Python SDK v2 (`mcp.server.lowlevel.Server`)
-- [ ] Transport adapters: `stdio` for AI desktop clients & Streamable HTTP / SSE for web agents
-- [ ] End-to-end integration tests (Client -> Gateway -> Upstream)
+- [x] Tool Router & Proxy Dispatcher (namespace resolution, pre-flight JSON schema validation, error interception)
+- [x] Downstream MCP Gateway Server using MCP Python SDK v2 (`mcp.server.lowlevel.Server`)
+- [x] Standard stdio transport for downstream AI clients (Claude Desktop, Cursor, AI agents)
+- [x] End-to-end integration test with separate downstream MCP client (`test_downstream_client_e2e_gateway_proxy`) (89 tests passing)
 
 ### Phase 5: Controlled Custom Upstream MCP Servers
 - [x] Controlled Filesystem MCP Server (`list_directory`, `read_file`, `write_file`, `search_files`, `get_file_info`)
