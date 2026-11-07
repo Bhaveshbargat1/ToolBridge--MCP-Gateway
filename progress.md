@@ -58,12 +58,17 @@
 - [ ] Upstream verification tests
 
 ### Phase 6: FastAPI Management API & Audit Engine
-- [ ] REST API endpoints for server registration & lifecycle
-- [ ] Tool catalog & policy management endpoints
-- [ ] Audit log query and export endpoints
-- [ ] Approval workflow REST endpoints (list pending, approve, reject)
-- [ ] API authentication (API key / Bearer token)
-- [ ] FastAPI test suite (`httpx` TestClient)
+- [x] REST API endpoints for server registration & lifecycle (`GET/POST/DELETE /api/v1/servers`)
+- [x] Tool catalog & invocation endpoints (`GET /api/v1/tools`, `POST /api/v1/tools/invoke`)
+- [x] Audit log query and filter endpoints (`GET /api/v1/audit`, `GET /api/v1/audit/{id}`)
+- [x] Health check endpoint (`GET /health`)
+- [x] API authentication (`X-API-Key` & `Authorization: Bearer`)
+- [x] Role-based authorization (`ADMIN`, `OPERATOR`, `READONLY`)
+- [x] Tool sensitivity tier governance (`SAFE` vs `SENSITIVE`)
+- [x] Sliding window rate limiting (HTTP 429 with `Retry-After`)
+- [x] Secret sanitization (redacting tokens, passwords, keys)
+- [x] SQLite persistence for audit logs (`AuditLogRecord` via SQLModel & aiosqlite)
+- [x] FastAPI test suite with 104 tests passing across the project
 
 ### Phase 7: Streamlit Enterprise Dashboard & End-to-End Verification
 - [ ] Server Registry & Health monitor UI

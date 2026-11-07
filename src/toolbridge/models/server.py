@@ -6,6 +6,8 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel, Field
 
+from toolbridge.security.policy import UserRole
+
 
 class TransportType(str, Enum):
     """Supported MCP upstream transport types."""
