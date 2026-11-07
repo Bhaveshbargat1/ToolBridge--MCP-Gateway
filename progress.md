@@ -34,11 +34,12 @@
 - [ ] Policy engine & Sensitivity classification (Read-Only vs. Sensitive operations)
 - [ ] Human-in-the-loop approval workflow (Pending -> Approved/Rejected)
 - [x] Filesystem security guard (path traversal prevention, symlink escape checks, Windows device name defense)
-- [ ] PostgreSQL read-only query validator (AST parser, forbidden keyword & multi-statement check)
+- [x] PostgreSQL read-only query validator (AST parser, forbidden keyword & multi-statement check)
 - [ ] Input schema validator (pre-flight payload validation against upstream JSON schemas)
 - [ ] Rate limiter & execution timeout enforcement
 - [ ] Secret scrubbing in logs and error traces
 - [x] Filesystem Security penetration test suite (18 security tests passing)
+- [x] SQL Security penetration test suite (29 security tests passing)
 
 ### Phase 4: Dynamic Tool Router & Downstream MCP Server
 - [ ] Tool Router (namespace resolution, dispatching, execution metrics)
@@ -49,7 +50,8 @@
 ### Phase 5: Controlled Custom Upstream MCP Servers
 - [x] Controlled Filesystem MCP Server (`list_directory`, `read_file`, `write_file`, `search_files`, `get_file_info`)
 - [x] Filesystem MCP stdio protocol integration test (`test_stdio_filesystem_server_e2e`)
-- [ ] Controlled PostgreSQL MCP Server (read-only query executor & inspector)
+- [x] Controlled PostgreSQL MCP Server (`list_tables`, `describe_table`, `execute_query`)
+- [x] PostgreSQL MCP stdio protocol integration test (`test_stdio_postgres_server_e2e`)
 - [ ] Official GitHub MCP Server integration wrapper
 - [ ] System Monitoring MCP Server (safe metrics)
 - [ ] Upstream verification tests
