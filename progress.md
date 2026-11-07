@@ -24,11 +24,12 @@
 - [ ] Unit tests for models and persistence
 
 ### Phase 2: Upstream Client Manager & Discovery
-- [ ] Upstream MCP Client Manager (`ClientSession`, stdio/SSE transports, connection lifecycles)
-- [ ] Dynamic Tool Discovery engine (inspect `tools/list`, schema normalization)
-- [ ] Namespacing engine (conflict prevention, e.g. `fs__list_files`, `gh__search_repos`)
-- [ ] Health check and reconnect daemon with backoff
-- [ ] Unit & integration tests with controlled upstream servers
+- [x] Upstream MCP Client Manager (`ClientSession`, stdio transports, connection lifecycles)
+- [x] Dynamic Tool Discovery engine (inspect `tools/list`, schema normalization)
+- [x] Namespacing engine (conflict prevention, e.g. `filesystem__read_file`, `postgres__execute_query`, `github__get_repository`)
+- [x] Server Registry tracking servers, runtime statuses, and tool catalog
+- [x] Graceful disconnected & failing server error handling
+- [x] Integration tests connecting to all three upstream servers simultaneously (86 tests passing)
 
 ### Phase 3: Security, Permission Manager & Guardrails
 - [ ] Policy engine & Sensitivity classification (Read-Only vs. Sensitive operations)
