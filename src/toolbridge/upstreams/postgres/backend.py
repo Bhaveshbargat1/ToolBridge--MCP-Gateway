@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+import logging
+import os
+import re
+import sys
 from typing import Any, Mapping, Sequence
 import aiosqlite
 import asyncpg
+
+logger = logging.getLogger("toolbridge.postgres.backend")
 
 
 class DatabaseConnectionError(ConnectionError):
@@ -58,16 +64,16 @@ class PostgresBackend(DatabaseBackend):
 
     def __init__(
         self,
-        host: str = "localhost",
+        host: str = "127.0.0.1",
         port: int = 5432,
         database: str = "toolbridge_demo",
         user: str = "mcp_readonly",
         password: str = "",
         min_pool_size: int = 1,
         max_pool_size: int = 10,
-        connect_timeout: float = 5.0,
+        connect_timeout: float = 2.0,
     ) -> None:
-        self.host = host
+        self.host = "127.0.0.1" if host == "localhost" else host
         self.port = port
         self.database = database
         self.user = user
@@ -168,13 +174,12 @@ class PostgresBackend(DatabaseBackend):
             except asyncpg.PostgresError as e:
                 raise RuntimeError(f"PostgreSQL Execution Error: {e}") from e
 
-            # Limit rows
             limited = records[:max_rows]
             return [dict(r) for r in limited]
 
 
 class SQLiteTestBackend(DatabaseBackend):
-    """Hermetic SQLite test adapter pre-populated with sample data for offline verification."""
+    """Hermetic SQLite adapter pre-populated with sample schema and data."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self.db_path = db_path
@@ -184,15 +189,19 @@ class SQLiteTestBackend(DatabaseBackend):
         if self._conn is not None:
             return
 
+        if self.db_path != ":memory:":
+            os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
 
-        # Setup sample tables for testing
+        # Setup sample tables for testing and offline execution
         await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS customers (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 email TEXT UNIQUE NOT NULL,
+                company TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -200,27 +209,73 @@ class SQLiteTestBackend(DatabaseBackend):
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY,
                 customer_id INTEGER,
-                amount REAL NOT NULL,
+                total_amount REAL NOT NULL,
                 status TEXT NOT NULL,
+                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (customer_id) REFERENCES customers (id)
             );
         """)
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY,
+                sku TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                price REAL NOT NULL,
+                stock_quantity INTEGER DEFAULT 0
+            );
+        """)
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
-        # Insert seed data if table is empty
+        # Insert seed data if customers table is empty
         cursor = await self._conn.execute("SELECT count(*) as count FROM customers")
         row = await cursor.fetchone()
-        if row["count"] == 0:
+        count = row["count"] if row else 0
+        await cursor.close()
+
+        if count == 0:
             await self._conn.execute(
-                "INSERT INTO customers (id, name, email) VALUES (1, 'Alice Smith', 'alice@example.com')"
+                "INSERT INTO customers (id, name, email, company) VALUES (1, 'Alice Smith', 'alice@example.com', 'Acme Corp')"
             )
             await self._conn.execute(
-                "INSERT INTO customers (id, name, email) VALUES (2, 'Bob Jones', 'bob@example.com')"
+                "INSERT INTO customers (id, name, email, company) VALUES (2, 'Bob Jones', 'bob@example.com', 'Stark Industries')"
             )
             await self._conn.execute(
-                "INSERT INTO orders (id, customer_id, amount, status) VALUES (101, 1, 150.50, 'completed')"
+                "INSERT INTO customers (id, name, email, company) VALUES (3, 'Bruce Wayne', 'bruce@wayne.com', 'Wayne Enterprises')"
             )
             await self._conn.execute(
-                "INSERT INTO orders (id, customer_id, amount, status) VALUES (102, 1, 45.00, 'pending')"
+                "INSERT INTO orders (id, customer_id, total_amount, status) VALUES (101, 1, 3498.00, 'completed')"
+            )
+            await self._conn.execute(
+                "INSERT INTO orders (id, customer_id, total_amount, status) VALUES (102, 2, 999.00, 'processing')"
+            )
+            await self._conn.execute(
+                "INSERT INTO orders (id, customer_id, total_amount, status) VALUES (103, 3, 450.00, 'completed')"
+            )
+            await self._conn.execute(
+                "INSERT INTO products (id, sku, name, price, stock_quantity) VALUES (1, 'SRV-001', 'High-Performance Gateway Server', 2499.00, 15)"
+            )
+            await self._conn.execute(
+                "INSERT INTO products (id, sku, name, price, stock_quantity) VALUES (2, 'SW-002', 'ToolBridge Enterprise License', 999.00, 100)"
+            )
+            await self._conn.execute(
+                "INSERT INTO products (id, sku, name, price, stock_quantity) VALUES (3, 'ACC-003', 'Hardware Security Module (HSM)', 450.00, 30)"
+            )
+            await self._conn.execute(
+                "INSERT INTO users (id, username, email, role) VALUES (1, 'admin_super', 'admin@toolbridge.io', 'admin')"
+            )
+            await self._conn.execute(
+                "INSERT INTO users (id, username, email, role) VALUES (2, 'operator_dev', 'operator@toolbridge.io', 'operator')"
+            )
+            await self._conn.execute(
+                "INSERT INTO users (id, username, email, role) VALUES (3, 'analyst_ro', 'analyst@toolbridge.io', 'readonly')"
             )
             await self._conn.commit()
 
@@ -236,25 +291,31 @@ class SQLiteTestBackend(DatabaseBackend):
         await self.connect()
         sql = "SELECT name as table_name, type as table_type FROM sqlite_master WHERE type in ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
         cursor = await self._conn.execute(sql)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        try:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            await cursor.close()
 
     async def describe_table(self, table_name: str, schema: str = "public") -> list[dict[str, Any]]:
         await self.connect()
         cursor = await self._conn.execute(f"PRAGMA table_info({table_name});")
-        rows = await cursor.fetchall()
-        if not rows:
-            raise FileNotFoundError(f"Table '{table_name}' does not exist.")
-        columns = []
-        for r in rows:
-            columns.append({
-                "column_name": r["name"],
-                "data_type": r["type"],
-                "is_nullable": "YES" if not r["notnull"] else "NO",
-                "column_default": r["dflt_value"],
-                "is_primary_key": bool(r["pk"]),
-            })
-        return columns
+        try:
+            rows = await cursor.fetchall()
+            if not rows:
+                raise FileNotFoundError(f"Table '{table_name}' does not exist.")
+            columns = []
+            for r in rows:
+                columns.append({
+                    "column_name": r["name"],
+                    "data_type": r["type"],
+                    "is_nullable": "YES" if not r["notnull"] else "NO",
+                    "column_default": r["dflt_value"],
+                    "is_primary_key": bool(r["pk"]),
+                })
+            return columns
+        finally:
+            await cursor.close()
 
     async def execute_query(
         self,
@@ -266,17 +327,101 @@ class SQLiteTestBackend(DatabaseBackend):
         await self.connect()
         params = list(parameters or [])
         # Translate Postgres parameter placeholders ($1, $2) to SQLite (?) for test backend
-        import re
         sqlite_query = re.sub(r"\$\d+", "?", query)
 
+        cursor = await asyncio.wait_for(
+            self._conn.execute(sqlite_query, params),
+            timeout=timeout_seconds,
+        )
         try:
-            cursor = await asyncio.wait_for(
-                self._conn.execute(sqlite_query, params),
-                timeout=timeout_seconds,
-            )
             rows = await cursor.fetchmany(max_rows)
             return [dict(r) for r in rows]
         except asyncio.TimeoutError:
             raise DatabaseQueryTimeoutError(f"Query timed out after {timeout_seconds} seconds.")
         except Exception as e:
             raise RuntimeError(f"Database Execution Error: {e}") from e
+        finally:
+            await cursor.close()
+
+
+class ResilientPostgresBackend(DatabaseBackend):
+    """Dual-mode database backend that attempts PostgreSQL and transparently falls back to SQLite."""
+
+    def __init__(
+        self,
+        postgres_backend: PostgresBackend | None = None,
+        sqlite_backend: SQLiteTestBackend | None = None,
+        fallback_db_path: str = "./data/sample_postgres.db",
+    ) -> None:
+        self.postgres_backend = postgres_backend or PostgresBackend()
+        self.sqlite_backend = sqlite_backend or SQLiteTestBackend(db_path=fallback_db_path)
+        self._active_backend: DatabaseBackend = self.postgres_backend
+        self._is_fallback: bool = False
+
+    @property
+    def is_fallback(self) -> bool:
+        """Whether the backend is currently operating in fallback SQLite mode."""
+        return self._is_fallback
+
+    async def connect(self) -> None:
+        """Attempt PostgreSQL connection with graceful automatic fallback to SQLite."""
+        force_sqlite = os.environ.get("POSTGRES_BACKEND", "").lower() == "sqlite"
+        if force_sqlite:
+            self._active_backend = self.sqlite_backend
+            self._is_fallback = True
+            await self.sqlite_backend.connect()
+            return
+
+        # Fast TCP pre-flight check to avoid long timeouts on closed ports
+        port_open = False
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.postgres_backend.host, self.postgres_backend.port),
+                timeout=0.25,
+            )
+            writer.close()
+            await writer.wait_closed()
+            port_open = True
+        except Exception:
+            port_open = False
+
+        if port_open:
+            try:
+                await self.postgres_backend.connect()
+                self._active_backend = self.postgres_backend
+                self._is_fallback = False
+                return
+            except Exception as e:
+                logger.warning(f"PostgreSQL connection failed despite open port: {e}")
+
+        # Fallback to local SQLite backend
+        sys.stderr.write(
+            f"[ToolBridge Postgres] Host unreachable at {self.postgres_backend.host}:{self.postgres_backend.port}. "
+            f"Operating on embedded SQLite database ({self.sqlite_backend.db_path}) with sample schema.\n"
+        )
+        self._active_backend = self.sqlite_backend
+        self._is_fallback = True
+        await self.sqlite_backend.connect()
+
+    async def disconnect(self) -> None:
+        await self._active_backend.disconnect()
+
+    async def list_tables(self, schema: str = "public") -> list[dict[str, Any]]:
+        return await self._active_backend.list_tables(schema=schema)
+
+    async def describe_table(self, table_name: str, schema: str = "public") -> list[dict[str, Any]]:
+        return await self._active_backend.describe_table(table_name=table_name, schema=schema)
+
+    async def execute_query(
+        self,
+        query: str,
+        parameters: Sequence[Any] | None = None,
+        timeout_seconds: float = 10.0,
+        max_rows: int = 500,
+    ) -> list[dict[str, Any]]:
+        return await self._active_backend.execute_query(
+            query=query,
+            parameters=parameters,
+            timeout_seconds=timeout_seconds,
+            max_rows=max_rows,
+        )

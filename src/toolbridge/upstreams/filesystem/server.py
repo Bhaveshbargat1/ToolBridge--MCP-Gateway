@@ -165,9 +165,10 @@ ALL_FILESYSTEM_TOOLS: list[Tool] = [
 class FilesystemMCPServer:
     """Encapsulates the controlled Filesystem MCP Server and its security-guarded tool handlers."""
 
-    def __init__(self, sandbox_root: str | Path) -> None:
+    def __init__(self, sandbox_root: str | Path | None = None) -> None:
         """Initialize the server with a dedicated sandbox root directory."""
-        self.guard = FilesystemGuard(sandbox_root=sandbox_root)
+        root = sandbox_root or os.environ.get("FILESYSTEM_SANDBOX_ROOT", "./workspace_sandbox")
+        self.guard = FilesystemGuard(sandbox_root=root)
         self.server = Server(
             name="toolbridge-filesystem",
             version="0.1.0",

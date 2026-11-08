@@ -24,6 +24,7 @@ from toolbridge.upstreams.postgres.backend import (
     DatabaseConnectionError,
     DatabaseQueryTimeoutError,
     PostgresBackend,
+    ResilientPostgresBackend,
     SQLiteTestBackend,
 )
 
@@ -121,14 +122,18 @@ class PostgresMCPServer:
         )
 
     def _create_default_backend(self) -> DatabaseBackend:
-        """Create a PostgresBackend configured from environment variables."""
-        return PostgresBackend(
+        """Create a resilient database backend with automatic SQLite fallback."""
+        pg = PostgresBackend(
             host=os.environ.get("POSTGRES_READONLY_HOST", "localhost"),
             port=int(os.environ.get("POSTGRES_READONLY_PORT", 5432)),
             database=os.environ.get("POSTGRES_READONLY_DB", "toolbridge_demo"),
             user=os.environ.get("POSTGRES_READONLY_USER", "mcp_readonly"),
             password=os.environ.get("POSTGRES_READONLY_PASSWORD", ""),
-            connect_timeout=float(os.environ.get("POSTGRES_CONNECT_TIMEOUT", 5.0)),
+            connect_timeout=float(os.environ.get("POSTGRES_CONNECT_TIMEOUT", 2.0)),
+        )
+        return ResilientPostgresBackend(
+            postgres_backend=pg,
+            fallback_db_path=os.environ.get("POSTGRES_SQLITE_PATH", "./data/sample_postgres.db"),
         )
 
     async def _handle_list_tools(

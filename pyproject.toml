@@ -43,7 +43,7 @@ dev = [
 [project.scripts]
 toolbridge = "toolbridge.server.gateway:main"
 toolbridge-api = "toolbridge.api.app:main"
-toolbridge-dashboard = "toolbridge.dashboard.app:main"
+toolbridge-dashboard = "toolbridge.dashboard.app:run_dashboard"
 
 [tool.setuptools.packages.find]
 where = ["src"]
