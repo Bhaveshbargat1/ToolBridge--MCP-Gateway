@@ -12,13 +12,18 @@ Usage:
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.request
 import webbrowser
 
 
 def get_python() -> str:
-    """Return path to virtualenv python executable if available."""
+    """Return path to virtualenv python executable if available, fallback to py/sys.executable."""
+    # Check .venv in current directory
     venv_py = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
     if os.path.isfile(venv_py):
         return venv_py
@@ -28,18 +33,54 @@ def get_python() -> str:
     return sys.executable
 
 
-def run_web() -> None:
-    """Launch Web Control Center and open browser."""
+def find_available_port(preferred_port: int = 8000) -> int:
+    """Find an open port starting from preferred_port."""
+    for port in range(preferred_port, preferred_port + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            if s.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    return preferred_port
+
+
+def open_browser_when_ready(url: str, max_wait: float = 10.0) -> None:
+    """Poll URL until server responds, then open browser to avoid 'connection refused' errors."""
+    def _poll():
+        start = time.time()
+        while time.time() - start < max_wait:
+            time.sleep(0.3)
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "ToolBridge-Launcher"})
+                with urllib.request.urlopen(req, timeout=0.5) as resp:
+                    if resp.status == 200:
+                        webbrowser.open(url)
+                        return
+            except Exception:
+                pass
+        # Fallback open anyway if timeout
+        webbrowser.open(url)
+
+    threading.Thread(target=_poll, daemon=True).start()
+
+
+def run_web(port: int | None = None) -> None:
+    """Launch Web Control Center with smart port detection and delayed browser launch."""
+    selected_port = port or find_available_port(8000)
+    url = f"http://127.0.0.1:{selected_port}"
     print("=" * 60)
-    print("Starting ToolBridge Web Control Center on port 8000...")
-    print("Opening browser: http://127.0.0.1:8000")
+    print(f"Starting ToolBridge Web Control Center on port {selected_port}...")
+    print(f"Browser will automatically open to: {url}")
     print("=" * 60)
+
+    # Automatically open browser once server is listening
+    open_browser_when_ready(url)
+
     py = get_python()
-    try:
-        webbrowser.open("http://127.0.0.1:8000")
-    except Exception:
-        pass
-    subprocess.run([py, "-m", "uvicorn", "toolbridge.api.app:app", "--host", "127.0.0.1", "--port", "8000"])
+    subprocess.run([
+        py, "-m", "uvicorn", "toolbridge.api.app:app",
+        "--host", "127.0.0.1",
+        "--port", str(selected_port),
+    ])
 
 
 def run_dashboard() -> None:
@@ -53,15 +94,20 @@ def run_dashboard() -> None:
     subprocess.run([py, "-m", "streamlit", "run", app_path])
 
 
-def run_api() -> None:
+def run_api(port: int | None = None) -> None:
     """Launch FastAPI management API."""
+    selected_port = port or find_available_port(8000)
     print("=" * 60)
-    print("Starting ToolBridge FastAPI Management Service on port 8000...")
-    print("Open Swagger API docs: http://127.0.0.1:8000/docs")
+    print(f"Starting ToolBridge FastAPI Management Service on port {selected_port}...")
+    print(f"Open Swagger API docs: http://127.0.0.1:{selected_port}/docs")
     print("Default API Keys: tb-admin-key-999 / tb-operator-key-555 / tb-readonly-key-111")
     print("=" * 60)
     py = get_python()
-    subprocess.run([py, "-m", "uvicorn", "toolbridge.api.app:app", "--host", "127.0.0.1", "--port", "8000"])
+    subprocess.run([
+        py, "-m", "uvicorn", "toolbridge.api.app:app",
+        "--host", "127.0.0.1",
+        "--port", str(selected_port),
+    ])
 
 
 def run_gateway() -> None:
