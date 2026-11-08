@@ -109,6 +109,18 @@ def create_app(
     app.include_router(tools.router)
     app.include_router(audit.router)
 
+    # Mount Static Web App Frontend
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.exists(static_dir):
+        from fastapi.responses import FileResponse
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+        @app.get("/", include_in_schema=False)
+        async def serve_index():
+            return FileResponse(os.path.join(static_dir, "index.html"))
+
     return app
 
 

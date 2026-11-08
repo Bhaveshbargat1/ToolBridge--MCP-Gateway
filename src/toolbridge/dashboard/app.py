@@ -676,8 +676,50 @@ with tab_tools:
         st.markdown("#### ⚡ Interactive Tool Runner")
         st.caption("Simulate downstream AI client tool calls through ToolBridge's security guardrails.")
 
+        st.markdown("##### ⚡ 1-Click Test Scenarios")
+        q1, q2, q3 = st.columns(3)
+        with q1:
+            if st.button("🗄️ Query Customers", use_container_width=True):
+                st.session_state["runner_tool"] = "postgres__execute_query"
+                st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers LIMIT 5;",\n  "parameters": []\n}'
+                st.session_state["runner_role_idx"] = 0
+                st.rerun()
+            if st.button("🚨 SQL Injection", use_container_width=True):
+                st.session_state["runner_tool"] = "postgres__execute_query"
+                st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers; DROP TABLE orders;",\n  "parameters": []\n}'
+                st.session_state["runner_role_idx"] = 0
+                st.rerun()
+        with q2:
+            if st.button("📂 List Workspace", use_container_width=True):
+                st.session_state["runner_tool"] = "filesystem__list_directory"
+                st.session_state["runner_args"] = '{\n  "path": ""\n}'
+                st.session_state["runner_role_idx"] = 0
+                st.rerun()
+            if st.button("🛑 Path Traversal", use_container_width=True):
+                st.session_state["runner_tool"] = "filesystem__read_file"
+                st.session_state["runner_args"] = '{\n  "path": "../../windows/system32/cmd.exe"\n}'
+                st.session_state["runner_role_idx"] = 0
+                st.rerun()
+        with q3:
+            if st.button("🐙 Search GitHub", use_container_width=True):
+                st.session_state["runner_tool"] = "github__search_repositories"
+                st.session_state["runner_args"] = '{\n  "query": "modelcontextprotocol"\n}'
+                st.session_state["runner_role_idx"] = 0
+                st.rerun()
+            if st.button("🔒 RBAC Deny", use_container_width=True):
+                st.session_state["runner_tool"] = "filesystem__write_file"
+                st.session_state["runner_args"] = '{\n  "path": "test.txt",\n  "content": "unauthorized attempt",\n  "overwrite": true\n}'
+                st.session_state["runner_role_idx"] = 2
+                st.rerun()
+
+        st.markdown("---")
+
         tool_names = [t["namespaced_name"] for t in discovered_tools]
-        selected_tool_name = st.selectbox("Select Tool to Invoke", tool_names)
+        default_tool_idx = 0
+        if "runner_tool" in st.session_state and st.session_state["runner_tool"] in tool_names:
+            default_tool_idx = tool_names.index(st.session_state["runner_tool"])
+
+        selected_tool_name = st.selectbox("Select Tool to Invoke", tool_names, index=default_tool_idx)
         target_tool = next((t for t in discovered_tools if t["namespaced_name"] == selected_tool_name), None)
 
         sample_payloads = {
@@ -694,13 +736,21 @@ with tab_tools:
             "github__search_repositories": '{"query": "modelcontextprotocol"}',
         }
 
-        default_args_str = sample_payloads.get(selected_tool_name, "{}")
+        default_args_str = st.session_state.get("runner_args", sample_payloads.get(selected_tool_name, "{}"))
+        if "runner_tool" in st.session_state and st.session_state["runner_tool"] != selected_tool_name:
+            default_args_str = sample_payloads.get(selected_tool_name, "{}")
+            st.session_state["runner_tool"] = selected_tool_name
+            st.session_state["runner_args"] = default_args_str
+
         args_text = st.text_area("Arguments (JSON)", value=default_args_str, height=120)
 
-        sim_role = st.selectbox(
-            "Simulated Caller Role",
-            ["ADMIN (tb-admin-key-999)", "OPERATOR (tb-operator-key-555)", "READONLY (tb-readonly-key-111)"],
-        )
+        role_options = [
+            "ADMIN (tb-admin-key-999)",
+            "OPERATOR (tb-operator-key-555)",
+            "READONLY (tb-readonly-key-111)",
+        ]
+        default_role_idx = min(st.session_state.get("runner_role_idx", 0), len(role_options) - 1)
+        sim_role = st.selectbox("Simulated Caller Role", role_options, index=default_role_idx)
         selected_key = (
             "tb-admin-key-999" if "ADMIN" in sim_role
             else "tb-operator-key-555" if "OPERATOR" in sim_role

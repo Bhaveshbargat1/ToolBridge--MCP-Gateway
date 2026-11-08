@@ -2,6 +2,7 @@
 
 Usage:
   python run_demo.py            # Interactive selection menu
+  python run_demo.py web        # Launch Web Control Center (Single-Page Web App)
   python run_demo.py dashboard  # Launch Streamlit Control Plane
   python run_demo.py api        # Launch FastAPI Management Service
   python run_demo.py gateway    # Launch Downstream Gateway Server (stdio)
@@ -13,6 +14,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import webbrowser
 
 
 def get_python() -> str:
@@ -24,6 +26,20 @@ def get_python() -> str:
     if os.path.isfile(venv_py_posix):
         return venv_py_posix
     return sys.executable
+
+
+def run_web() -> None:
+    """Launch Web Control Center and open browser."""
+    print("=" * 60)
+    print("Starting ToolBridge Web Control Center on port 8000...")
+    print("Opening browser: http://127.0.0.1:8000")
+    print("=" * 60)
+    py = get_python()
+    try:
+        webbrowser.open("http://127.0.0.1:8000")
+    except Exception:
+        pass
+    subprocess.run([py, "-m", "uvicorn", "toolbridge.api.app:app", "--host", "127.0.0.1", "--port", "8000"])
 
 
 def run_dashboard() -> None:
@@ -111,7 +127,9 @@ def main() -> None:
     """Entrypoint dispatcher."""
     cmd = sys.argv[1].lower() if len(sys.argv) > 1 else ""
 
-    if cmd == "dashboard":
+    if cmd in ("web", "ui", "frontend"):
+        run_web()
+    elif cmd == "dashboard":
         run_dashboard()
     elif cmd == "api":
         run_api()
@@ -126,17 +144,17 @@ def main() -> None:
         print("🌉 ToolBridge Enterprise MCP Gateway — Quick Launcher")
         print("=" * 60)
         print("Select an option to run:")
-        print("  1. Streamlit Observability Dashboard (Interactive UI)")
-        print("  2. FastAPI Management API & Swagger Docs (Port 8000)")
+        print("  1. Modern Web Control Center (Single-Page App at http://127.0.0.1:8000)")
+        print("  2. Streamlit Dashboard (http://localhost:8501)")
         print("  3. Downstream MCP Gateway (stdio for Claude Desktop)")
         print("  4. Run Diagnostics Check")
         print("  5. Run Automated Test Suite (105 tests)")
         print("  q. Quit")
         choice = input("\nEnter choice [1-5 or q] (default: 1): ").strip()
         if choice in ("", "1"):
-            run_dashboard()
+            run_web()
         elif choice == "2":
-            run_api()
+            run_dashboard()
         elif choice == "3":
             run_gateway()
         elif choice == "4":

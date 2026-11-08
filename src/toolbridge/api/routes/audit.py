@@ -41,6 +41,14 @@ async def query_audit_logs(
     }
 
 
+@router.post("/seed")
+async def seed_audit_records():
+    """Seed realistic execution and security traces into SQLite."""
+    from toolbridge.dashboard.seed_data import seed_audit_logs
+    count = await seed_audit_logs(force=True)
+    return {"message": f"Successfully seeded {count} audit records into SQLite.", "count": count}
+
+
 @router.get("/{log_id}")
 async def get_audit_log_by_id(
     log_id: int,

@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ToolBridge — Enterprise MCP Gateway</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eef8ff',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#075985',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    pre, code { font-family: 'JetBrains Mono', monospace; }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 3px; }
+  </style>
+</head>
+<body class="h-full flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-sky-500 selection:text-white">
+
+  <!-- Top Navbar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20 text-white font-bold text-xl">
+          🌉
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-200 to-sky-400 bg-clip-text text-transparent">ToolBridge</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-medium">Enterprise Gateway</span>
+          </div>
+          <p class="text-xs text-slate-400">Model Context Protocol (MCP) Aggregator</p>
+        </div>
+      </div>
+
+      <!-- Right controls: Role Selector & Health -->
+      <div class="flex items-center space-x-4">
+        <div id="healthBadge" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="healthText">Gateway Online</span>
+        </div>
+
+        <div class="flex items-center space-x-2 bg-slate-800/80 p-1 rounded-lg border border-slate-700/60">
+          <label for="roleSelector" class="text-xs text-slate-400 pl-2">Role:</label>
+          <select id="roleSelector" onchange="updateSelectedRole()" class="bg-slate-900 text-xs text-slate-200 rounded px-2.5 py-1 border border-slate-700 focus:outline-none focus:border-sky-500">
+            <option value="admin">Admin (Full Access)</option>
+            <option value="operator">Operator (Safe + Writes)</option>
+            <option value="readonly">Read-Only (Restricted)</option>
+          </select>
+        </div>
+
+        <a href="/docs" target="_blank" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center space-x-1.5">
+          <i class="fa-solid fa-code text-sky-400"></i>
+          <span>Swagger API</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8">
+
+    <!-- KPI Metric Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="glass-card rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between text-slate-400 mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider">Upstream Servers</span>
+          <i class="fa-solid fa-server text-sky-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white" id="statServers">3 / 3 Active</div>
+        <p class="text-xs text-emerald-400 mt-1 flex items-center">
+          <i class="fa-solid fa-check-circle mr-1"></i> Filesystem, Postgres, GitHub
+        </p>
+      </div>
+
+      <div class="glass-card rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between text-slate-400 mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider">Discovered Tools</span>
+          <i class="fa-solid fa-toolbox text-indigo-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white" id="statTools">11 Tools</div>
+        <p class="text-xs text-slate-400 mt-1 flex items-center">
+          <i class="fa-solid fa-shield-halved text-sky-400 mr-1"></i> Pre-flight validated & namespaced
+        </p>
+      </div>
+
+      <div class="glass-card rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between text-slate-400 mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider">Security Guardrails</span>
+          <i class="fa-solid fa-shield-virus text-emerald-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-emerald-400">7 Layers Active</div>
+        <p class="text-xs text-slate-400 mt-1">Sandbox + AST Guard + RBAC</p>
+      </div>
+
+      <div class="glass-card rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between text-slate-400 mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider">Audit Log Persistence</span>
+          <i class="fa-solid fa-database text-amber-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white" id="statAudits">Live SQLite</div>
+        <p class="text-xs text-amber-400/90 mt-1 flex items-center">
+          <i class="fa-solid fa-lock mr-1"></i> Auto-sanitized (***REDACTED***)
+        </p>
+      </div>
+    </div>
+
+    <!-- 1-Click Interactive Demo Scenarios -->
+    <section class="space-y-3">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-white flex items-center">
+            <span class="mr-2 text-sky-400">⚡</span> 1-Click Interactive Scenarios
+          </h2>
+          <p class="text-xs text-slate-400">Click any card below to instantly test ToolBridge's routing, database fallback, and security guardrails.</p>
+        </div>
+        <button onclick="seedDemoLogs()" class="text-xs px-3 py-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition flex items-center space-x-1">
+          <i class="fa-solid fa-dice mr-1"></i> Seed 12 Demo Traces
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <!-- 1. Query Database -->
+        <div onclick="runScenario('db')" class="glass-card rounded-xl p-4 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-900/90 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-solid fa-database"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SAFE</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-sky-300 transition">Query Customers Database</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Executes approved read-only parameterized query against customers table.</p>
+          <div class="mt-3 flex items-center text-xs text-sky-400 font-medium group-hover:translate-x-1 transition">
+            Run Test <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+
+        <!-- 2. List Filesystem -->
+        <div onclick="runScenario('fs')" class="glass-card rounded-xl p-4 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-900/90 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-solid fa-folder-tree"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SAFE</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-indigo-300 transition">List Workspace Files</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Inspects files inside the designated sandboxed workspace.</p>
+          <div class="mt-3 flex items-center text-xs text-indigo-400 font-medium group-hover:translate-x-1 transition">
+            Run Test <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+
+        <!-- 3. GitHub Search -->
+        <div onclick="runScenario('gh')" class="glass-card rounded-xl p-4 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-900/90 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-brands fa-github"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SAFE</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-purple-300 transition">Search GitHub Repositories</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Queries GitHub REST API v3 for 'modelcontextprotocol' repositories.</p>
+          <div class="mt-3 flex items-center text-xs text-purple-400 font-medium group-hover:translate-x-1 transition">
+            Run Test <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+
+        <!-- 4. Trigger SQL Injection -->
+        <div onclick="runScenario('sqli')" class="glass-card rounded-xl p-4 border border-red-950 hover:border-red-500/50 hover:bg-red-950/20 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-solid fa-bug"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20">SECURITY TEST</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-red-300 transition">Trigger Stacked SQL Injection</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Attempts `SELECT 1; DROP TABLE users;`. Watch AST Guard block it!</p>
+          <div class="mt-3 flex items-center text-xs text-red-400 font-medium group-hover:translate-x-1 transition">
+            Test AST Block <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+
+        <!-- 5. Trigger Path Traversal -->
+        <div onclick="runScenario('traversal')" class="glass-card rounded-xl p-4 border border-amber-950 hover:border-amber-500/50 hover:bg-amber-950/20 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-solid fa-shield-virus"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">SECURITY TEST</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-amber-300 transition">Trigger Path Traversal Escape</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Attempts `../../windows/system32/cmd.exe`. Watch Sandbox block it!</p>
+          <div class="mt-3 flex items-center text-xs text-amber-400 font-medium group-hover:translate-x-1 transition">
+            Test Traversal Block <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+
+        <!-- 6. Trigger RBAC Block -->
+        <div onclick="runScenario('rbac')" class="glass-card rounded-xl p-4 border border-orange-950 hover:border-orange-500/50 hover:bg-orange-950/20 transition cursor-pointer group">
+          <div class="flex items-start justify-between">
+            <div class="w-8 h-8 rounded-lg bg-orange-500/10 text-orange-400 flex items-center justify-center font-bold text-sm group-hover:scale-110 transition">
+              <i class="fa-solid fa-user-lock"></i>
+            </div>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">POLICY TEST</span>
+          </div>
+          <h3 class="text-sm font-semibold text-white mt-2 group-hover:text-orange-300 transition">Trigger RBAC 403 Forbidden</h3>
+          <p class="text-xs text-slate-400 mt-1 line-clamp-2">Readonly role attempts sensitive file write. Watch PolicyEngine deny it!</p>
+          <div class="mt-3 flex items-center text-xs text-orange-400 font-medium group-hover:translate-x-1 transition">
+            Test RBAC Deny <i class="fa-solid fa-arrow-right ml-1 text-[10px]"></i>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Execution Playground & Live Output Window -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- Left Column: Tool Selector & Arguments Input -->
+      <div class="lg:col-span-5 glass-card rounded-xl p-5 border border-slate-800 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="font-semibold text-white flex items-center text-sm">
+            <i class="fa-solid fa-terminal text-sky-400 mr-2"></i> Custom Tool Invocation
+          </h3>
+          <span id="toolTierBadge" class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            SAFE
+          </span>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Target MCP Tool:</label>
+          <select id="toolSelect" onchange="onToolSelectChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
+            <optgroup label="Filesystem MCP Server">
+              <option value="filesystem__list_directory">filesystem__list_directory</option>
+              <option value="filesystem__read_file">filesystem__read_file</option>
+              <option value="filesystem__write_file">filesystem__write_file</option>
+              <option value="filesystem__search_files">filesystem__search_files</option>
+              <option value="filesystem__get_file_info">filesystem__get_file_info</option>
+            </optgroup>
+            <optgroup label="PostgreSQL MCP Server">
+              <option value="postgres__list_tables">postgres__list_tables</option>
+              <option value="postgres__describe_table">postgres__describe_table</option>
+              <option value="postgres__execute_query" selected>postgres__execute_query</option>
+            </optgroup>
+            <optgroup label="GitHub MCP Server">
+              <option value="github__get_repository">github__get_repository</option>
+              <option value="github__list_issues">github__list_issues</option>
+              <option value="github__search_repositories">github__search_repositories</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs font-medium text-slate-300">Arguments (JSON Payload):</label>
+            <span class="text-[10px] text-slate-500 font-mono">Pre-flight validated</span>
+          </div>
+          <textarea id="toolArgs" rows="6" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs font-mono text-sky-300 focus:outline-none focus:border-sky-500 custom-scrollbar">{
+  "query": "SELECT * FROM customers LIMIT 5;",
+  "parameters": []
+}</textarea>
+        </div>
+
+        <button id="btnExecute" onclick="executeCurrentTool()" class="w-full py-2.5 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-sm transition flex items-center justify-center space-x-2 shadow-lg shadow-sky-600/20 active:scale-[0.98]">
+          <i class="fa-solid fa-play text-xs"></i>
+          <span>Execute via ToolBridge Gateway</span>
+        </button>
+      </div>
+
+      <!-- Right Column: Live Result Inspector Window -->
+      <div class="lg:col-span-7 glass-card rounded-xl p-5 border border-slate-800 flex flex-col">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+          <div class="flex items-center space-x-2">
+            <span class="w-3 h-3 rounded-full bg-red-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
+            <span class="text-xs font-medium text-slate-400 ml-2 font-mono">Execution Response</span>
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <span id="responseStatusBadge" class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
+              Ready
+            </span>
+            <span id="responseLatencyBadge" class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
+              0.0 ms
+            </span>
+          </div>
+        </div>
+
+        <div class="flex-1 relative">
+          <pre id="responseOutput" class="w-full h-72 lg:h-80 bg-slate-900/90 rounded-lg p-4 text-xs font-mono text-slate-300 overflow-auto border border-slate-800/80 custom-scrollbar">Click any 1-Click Scenario card above or click 'Execute via ToolBridge Gateway' to run a custom call.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Execution Audit Trail & Telemetry -->
+    <section class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-white flex items-center">
+            <i class="fa-solid fa-list-check text-sky-400 mr-2"></i> Real-time Execution Audit Trail
+          </h2>
+          <p class="text-xs text-slate-400">All gateway requests are scrubbed of secrets and persisted to SQLite.</p>
+        </div>
+        <button onclick="loadAuditLogs()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center space-x-1">
+          <i class="fa-solid fa-arrows-rotate mr-1"></i> Refresh Logs
+        </button>
+      </div>
+
+      <div class="glass-card rounded-xl border border-slate-800 overflow-hidden">
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 bg-slate-900/80 text-slate-400 uppercase tracking-wider font-semibold">
+                <th class="py-3 px-4">ID</th>
+                <th class="py-3 px-4">Timestamp (UTC)</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Tool Name</th>
+                <th class="py-3 px-4">Caller (Role)</th>
+                <th class="py-3 px-4">Latency</th>
+                <th class="py-3 px-4">Sanitized Arguments</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody" class="divide-y divide-slate-800/60 font-mono text-[11px] text-slate-300">
+              <tr>
+                <td colspan="7" class="py-6 text-center text-slate-500">Loading audit records from SQLite...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
+    ToolBridge Enterprise MCP Gateway • Built on official MCP Python SDK v2 • FastAPI & SQLite
+  </footer>
+
+  <!-- Application Logic -->
+  <script>
+    const API_KEYS = {
+      admin: "tb-admin-key-999",
+      operator: "tb-operator-key-555",
+      readonly: "tb-readonly-key-111"
+    };
+
+    let currentRole = "admin";
+
+    function updateSelectedRole() {
+      currentRole = document.getElementById("roleSelector").value;
+      console.log("Active role changed to:", currentRole);
+    }
+
+    const TEMPLATES = {
+      "filesystem__list_directory": JSON.stringify({ path: "" }, null, 2),
+      "filesystem__read_file": JSON.stringify({ path: "sample.txt" }, null, 2),
+      "filesystem__write_file": JSON.stringify({ path: "notes.txt", content: "Hello from ToolBridge!", overwrite: true }, null, 2),
+      "filesystem__search_files": JSON.stringify({ query: "*.py" }, null, 2),
+      "filesystem__get_file_info": JSON.stringify({ path: "sample.txt" }, null, 2),
+      "postgres__list_tables": JSON.stringify({ schema: "public" }, null, 2),
+      "postgres__describe_table": JSON.stringify({ table_name: "customers" }, null, 2),
+      "postgres__execute_query": JSON.stringify({ query: "SELECT * FROM customers LIMIT 5;", parameters: [] }, null, 2),
+      "github__get_repository": JSON.stringify({ owner: "modelcontextprotocol", repo: "python-sdk" }, null, 2),
+      "github__list_issues": JSON.stringify({ owner: "modelcontextprotocol", repo: "python-sdk", state: "open" }, null, 2),
+      "github__search_repositories": JSON.stringify({ query: "modelcontextprotocol" }, null, 2),
+    };
+
+    const SENSITIVE_TOOLS = ["filesystem__write_file"];
+
+    function onToolSelectChange() {
+      const tool = document.getElementById("toolSelect").value;
+      document.getElementById("toolArgs").value = TEMPLATES[tool] || "{}";
+      const badge = document.getElementById("toolTierBadge");
+      if (SENSITIVE_TOOLS.includes(tool)) {
+        badge.className = "text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20";
+        badge.textContent = "SENSITIVE";
+      } else {
+        badge.className = "text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        badge.textContent = "SAFE";
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const res = await fetch("/health");
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById("healthText").textContent = "Gateway Online (v" + data.version + ")";
+        }
+      } catch (err) {
+        document.getElementById("healthText").textContent = "Offline (Local SQLite)";
+        document.getElementById("healthBadge").className = "flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium";
+      }
+    }
+
+    async function executeCurrentTool() {
+      const toolName = document.getElementById("toolSelect").value;
+      const argsRaw = document.getElementById("toolArgs").value;
+      let argsObj;
+      try {
+        argsObj = JSON.parse(argsRaw);
+      } catch (e) {
+        alert("Invalid JSON arguments: " + e.message);
+        return;
+      }
+      await runTool(toolName, argsObj, currentRole);
+    }
+
+    async function runTool(toolName, args, role) {
+      const statusBadge = document.getElementById("responseStatusBadge");
+      const latencyBadge = document.getElementById("responseLatencyBadge");
+      const outputPre = document.getElementById("responseOutput");
+      const btn = document.getElementById("btnExecute");
+
+      statusBadge.textContent = "Executing...";
+      statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-mono animate-pulse";
+      outputPre.textContent = "Routing request through ToolBridge security engine and dispatching to upstream...";
+
+      const apiKey = API_KEYS[role] || API_KEYS.admin;
+      const t0 = performance.now();
+
+      try {
+        const resp = await fetch("/api/v1/tools/invoke", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": apiKey
+          },
+          body: JSON.stringify({
+            tool_name: toolName,
+            arguments: args
+          })
+        });
+
+        const dur = (performance.now() - t0).toFixed(1);
+        latencyBadge.textContent = dur + " ms";
+
+        let data;
+        const text = await resp.text();
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+
+        if (resp.ok) {
+          statusBadge.textContent = "200 OK";
+          statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono";
+          outputPre.textContent = typeof data.result === "string" ? data.result : JSON.stringify(data, null, 2);
+        } else if (resp.status === 403) {
+          statusBadge.textContent = "403 Forbidden (RBAC Denied)";
+          statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono";
+          outputPre.textContent = "🛑 Access Denied by PolicyEngine:\n" + (data.detail || JSON.stringify(data, null, 2));
+        } else if (resp.status === 400) {
+          statusBadge.textContent = "400 Bad Request (Guard Blocked)";
+          statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 font-mono";
+          outputPre.textContent = "🛡️ Security Violation Intercepted:\n" + (data.detail || JSON.stringify(data, null, 2));
+        } else {
+          statusBadge.textContent = resp.status + " Error";
+          statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 font-mono";
+          outputPre.textContent = JSON.stringify(data, null, 2);
+        }
+
+        loadAuditLogs();
+      } catch (err) {
+        statusBadge.textContent = "Network Error";
+        statusBadge.className = "text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 font-mono";
+        outputPre.textContent = "Failed to communicate with API: " + err.message;
+      }
+    }
+
+    async function runScenario(type) {
+      if (type === "db") {
+        document.getElementById("toolSelect").value = "postgres__execute_query";
+        document.getElementById("toolArgs").value = JSON.stringify({ query: "SELECT * FROM customers LIMIT 5;", parameters: [] }, null, 2);
+        onToolSelectChange();
+        await runTool("postgres__execute_query", { query: "SELECT * FROM customers LIMIT 5;", parameters: [] }, currentRole);
+      } else if (type === "fs") {
+        document.getElementById("toolSelect").value = "filesystem__list_directory";
+        document.getElementById("toolArgs").value = JSON.stringify({ path: "" }, null, 2);
+        onToolSelectChange();
+        await runTool("filesystem__list_directory", { path: "" }, currentRole);
+      } else if (type === "gh") {
+        document.getElementById("toolSelect").value = "github__search_repositories";
+        document.getElementById("toolArgs").value = JSON.stringify({ query: "modelcontextprotocol" }, null, 2);
+        onToolSelectChange();
+        await runTool("github__search_repositories", { query: "modelcontextprotocol" }, currentRole);
+      } else if (type === "sqli") {
+        document.getElementById("toolSelect").value = "postgres__execute_query";
+        document.getElementById("toolArgs").value = JSON.stringify({ query: "SELECT * FROM customers; DROP TABLE orders;" }, null, 2);
+        onToolSelectChange();
+        await runTool("postgres__execute_query", { query: "SELECT * FROM customers; DROP TABLE orders;" }, currentRole);
+      } else if (type === "traversal") {
+        document.getElementById("toolSelect").value = "filesystem__read_file";
+        document.getElementById("toolArgs").value = JSON.stringify({ path: "../../windows/system32/cmd.exe" }, null, 2);
+        onToolSelectChange();
+        await runTool("filesystem__read_file", { path: "../../windows/system32/cmd.exe" }, currentRole);
+      } else if (type === "rbac") {
+        document.getElementById("toolSelect").value = "filesystem__write_file";
+        document.getElementById("toolArgs").value = JSON.stringify({ path: "exploit.txt", content: "data" }, null, 2);
+        onToolSelectChange();
+        // Force readonly role to demonstrate RBAC 403 Forbidden!
+        await runTool("filesystem__write_file", { path: "exploit.txt", content: "data" }, "readonly");
+      }
+    }
+
+    async function loadAuditLogs() {
+      const apiKey = API_KEYS.admin;
+      try {
+        const res = await fetch("/api/v1/audit?limit=25", {
+          headers: { "X-API-Key": apiKey }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderAuditTable(data.logs || []);
+        }
+      } catch (e) {
+        console.warn("Could not load audit logs via API:", e);
+      }
+    }
+
+    function renderAuditTable(logs) {
+      const tbody = document.getElementById("auditTableBody");
+      if (!logs || logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-6 text-center text-slate-500">No audit records found. Click "Seed 12 Demo Traces" to populate.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = logs.map(l => {
+        let badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+        if (l.status === "ERROR" || l.status === "BLOCKED") badgeColor = "bg-red-500/10 text-red-400 border-red-500/20";
+        if (l.status === "UNAUTHORIZED") badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+        if (l.status === "RATE_LIMITED") badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+
+        const timeStr = l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "-";
+
+        return `
+          <tr class="hover:bg-slate-900/50 transition">
+            <td class="py-2.5 px-4 text-slate-500">#${l.id}</td>
+            <td class="py-2.5 px-4 text-slate-400">${timeStr}</td>
+            <td class="py-2.5 px-4">
+              <span class="px-2 py-0.5 rounded border ${badgeColor} font-semibold">${l.status}</span>
+            </td>
+            <td class="py-2.5 px-4 text-sky-300 font-medium">${l.tool_name}</td>
+            <td class="py-2.5 px-4 text-slate-300">${l.caller_id} <span class="text-slate-500">(${l.caller_role})</span></td>
+            <td class="py-2.5 px-4 text-slate-400">${l.duration_ms} ms</td>
+            <td class="py-2.5 px-4 text-slate-400 max-w-xs truncate" title="${l.arguments_json || ''}">${l.arguments_json || '{}'}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function seedDemoLogs() {
+      try {
+        const resp = await fetch("/api/v1/audit/seed", { method: "POST" });
+        if (resp.ok) {
+          await loadAuditLogs();
+        }
+      } catch (e) {
+        alert("Failed to seed: " + e.message);
+      }
+    }
+
+    // Init
+    checkHealth();
+    loadAuditLogs();
+    onToolSelectChange();
+    setInterval(loadAuditLogs, 8000);
+  </script>
+</body>
+</html>
