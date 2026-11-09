@@ -13,14 +13,19 @@ from toolbridge.db.session import init_db
 from toolbridge.models.server import TransportType, UpstreamServerConfig
 from toolbridge.security.rate_limiter import SlidingWindowRateLimiter
 
-ADMIN_KEY = "tb-admin-key-999"
-OPERATOR_KEY = "tb-operator-key-555"
-READONLY_KEY = "tb-readonly-key-111"
+ADMIN_KEY = "test_admin_key_32_characters_long_toolbridge_sec"
+OPERATOR_KEY = "test_operator_key_32_chars_long_toolbridge_sec"
+READONLY_KEY = "test_readonly_key_32_chars_long_toolbridge_sec"
 
 
 @pytest.fixture
 async def api_client(tmp_path: Path):
     """Setup test FastAPI app with in-memory SQLite and isolated sandbox."""
+    os.environ["TOOLBRIDGE_ADMIN_KEY"] = ADMIN_KEY
+    os.environ["TOOLBRIDGE_OPERATOR_KEY"] = OPERATOR_KEY
+    os.environ["TOOLBRIDGE_READONLY_KEY"] = READONLY_KEY
+    os.environ["TOOLBRIDGE_ALLOW_DYNAMIC_SERVERS"] = "true"
+
     db_file = tmp_path / "api_test.db"
     os.environ["TOOLBRIDGE_SQLITE_URL"] = f"sqlite+aiosqlite:///{db_file}"
     await init_db()
@@ -99,7 +104,7 @@ async def test_role_authorization_for_server_management(api_client):
         "name": "Dummy Server",
         "transport": "stdio",
         "command": sys.executable,
-        "args": ["-c", "print('dummy')"],
+        "args": ["-m", "toolbridge.upstreams.filesystem.server"],
     }
 
     # Readonly user cannot register server (Forbidden 403)
@@ -183,8 +188,12 @@ async def test_tool_invocation_authorization_and_audit(api_client):
     assert admin_invoke.status_code == 200
     assert (sandbox / "admin_output.txt").exists()
 
-    # 4. Verify Audit Logs recorded in SQLite
-    audit_res = await client.get("/api/v1/audit", headers={"X-API-Key": OPERATOR_KEY})
+    # 4. Verify Audit Logs require ADMIN (Operator gets 403)
+    op_audit = await client.get("/api/v1/audit", headers={"X-API-Key": OPERATOR_KEY})
+    assert op_audit.status_code == 403
+
+    # Admin successfully queries audit records
+    audit_res = await client.get("/api/v1/audit", headers={"X-API-Key": ADMIN_KEY})
     assert audit_res.status_code == 200
     logs = audit_res.json()["logs"]
     assert len(logs) >= 3
@@ -238,3 +247,32 @@ async def test_rate_limiting_enforcement(api_client):
     assert exceeded_res.status_code == 429
     assert "Rate limit exceeded" in exceeded_res.json()["detail"]
     assert "Retry-After" in exceeded_res.headers
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_serve_web_index_with_injected_dev_keys(api_client):
+    """Verify GET / returns web frontend with active keys injected for local dev."""
+    client, _, _, _ = api_client
+    res = await client.get("/")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")
+    html = res.text
+    assert "ToolBridge" in html
+    assert "window.__TOOLBRIDGE_DEV_KEYS__" in html
+    assert ADMIN_KEY in html
+    assert OPERATOR_KEY in html
+    assert READONLY_KEY in html
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audit_seed_endpoint(api_client):
+    """Verify POST /api/v1/audit/seed successfully populates traces."""
+    client, _, _, _ = api_client
+    res = await client.post("/api/v1/audit/seed")
+    assert res.status_code == 200
+    data = res.json()
+    assert "count" in data
+    assert data["count"] > 0
+

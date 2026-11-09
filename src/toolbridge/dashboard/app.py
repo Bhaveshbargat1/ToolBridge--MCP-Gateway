@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hmac
 import json
 import os
 import sys
@@ -104,7 +105,28 @@ st.markdown(
 # Helper Functions: API & Database Operations
 # -----------------------------------------------------------------------------
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-DEFAULT_ADMIN_KEY = "tb-admin-key-999"
+CONFIGURED_ADMIN_KEY = os.environ.get("TOOLBRIDGE_ADMIN_KEY", "").strip()
+try:
+    if not CONFIGURED_ADMIN_KEY and hasattr(st, "secrets") and "TOOLBRIDGE_ADMIN_KEY" in st.secrets:
+        CONFIGURED_ADMIN_KEY = str(st.secrets["TOOLBRIDGE_ADMIN_KEY"]).strip()
+except Exception:
+    pass
+
+
+def is_admin_authorized(token: str | None) -> bool:
+    """Validate caller is an authenticated administrator."""
+    if not token or not CONFIGURED_ADMIN_KEY:
+        return False
+    return hmac.compare_digest(token.strip(), CONFIGURED_ADMIN_KEY)
+
+
+def render_auth_gate_warning(section_name: str) -> bool:
+    """Check admin authorization; return True if authorized, else display auth gate notice."""
+    if is_admin_authorized(api_key_input):
+        return True
+    st.warning(f"🔒 Administrative Authentication Required: {section_name} is restricted to verified administrators.")
+    st.info("Please configure `TOOLBRIDGE_ADMIN_KEY` (32+ characters) and provide it in the sidebar to unlock.")
+    return False
 
 
 def check_fastapi_health(api_url: str) -> dict[str, Any] | None:
@@ -337,7 +359,7 @@ st.sidebar.title("🌉 ToolBridge Gateway")
 st.sidebar.caption("Enterprise MCP Multi-Server Aggregator")
 
 api_base_url = st.sidebar.text_input("FastAPI Base URL", value=DEFAULT_API_URL)
-api_key_input = st.sidebar.text_input("API Key / Bearer Token", value=DEFAULT_ADMIN_KEY, type="password")
+api_key_input = st.sidebar.text_input("Admin API Key / Bearer Token", value=CONFIGURED_ADMIN_KEY, type="password")
 
 # Connection Status Check
 health_data = check_fastapi_health(api_base_url)
@@ -359,10 +381,8 @@ if st.sidebar.button("🎲 Seed Demo Audit Records"):
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "**Default Test Keys**:\n"
-    "- Admin: `tb-admin-key-999`\n"
-    "- Operator: `tb-operator-key-555`\n"
-    "- Readonly: `tb-readonly-key-111`"
+    "**Role Authentication**:\n"
+    "Configure `TOOLBRIDGE_ADMIN_KEY`, `TOOLBRIDGE_OPERATOR_KEY`, and `TOOLBRIDGE_READONLY_KEY` (32+ chars) in environment."
 )
 
 # -----------------------------------------------------------------------------
@@ -552,245 +572,243 @@ with tab_tools:
     st.subheader("Dynamic Tool Catalog & Live Execution Playground")
     st.caption("Explore discovered upstream tools with their JSON input schemas, sensitivity tiers, and execute live tests.")
 
-    discovered_tools = []
-    if health_data:
-        discovered_tools = fetch_api_tools(api_base_url, api_key_input)
+    if render_auth_gate_warning("Live Execution Playground"):
+        discovered_tools = []
+        if health_data:
+            discovered_tools = fetch_api_tools(api_base_url, api_key_input)
 
-    if not discovered_tools:
-        discovered_tools = [
-            {
-                "namespaced_name": "filesystem__list_directory",
-                "server_id": "filesystem",
-                "original_name": "list_directory",
-                "sensitivity_tier": "safe",
-                "description": "List files and subdirectories inside the designated workspace.",
-                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}},
-            },
-            {
-                "namespaced_name": "filesystem__read_file",
-                "server_id": "filesystem",
-                "original_name": "read_file",
-                "sensitivity_tier": "safe",
-                "description": "Read file contents securely within designated workspace.",
-                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "encoding": {"type": "string"}}, "required": ["path"]},
-            },
-            {
-                "namespaced_name": "filesystem__write_file",
-                "server_id": "filesystem",
-                "original_name": "write_file",
-                "sensitivity_tier": "sensitive",
-                "description": "Atomically write or overwrite a file inside the designated sandbox.",
-                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]},
-            },
-            {
-                "namespaced_name": "filesystem__search_files",
-                "server_id": "filesystem",
-                "original_name": "search_files",
-                "sensitivity_tier": "safe",
-                "description": "Search for files matching glob pattern inside sandbox.",
-                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "path": {"type": "string"}}, "required": ["query"]},
-            },
-            {
-                "namespaced_name": "filesystem__get_file_info",
-                "server_id": "filesystem",
-                "original_name": "get_file_info",
-                "sensitivity_tier": "safe",
-                "description": "Get detailed metadata for a file or directory inside the sandbox.",
-                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-            },
-            {
-                "namespaced_name": "postgres__list_tables",
-                "server_id": "postgres",
-                "original_name": "list_tables",
-                "sensitivity_tier": "safe",
-                "description": "List all public database tables with row estimates.",
-                "input_schema": {"type": "object", "properties": {"schema": {"type": "string"}}},
-            },
-            {
-                "namespaced_name": "postgres__describe_table",
-                "server_id": "postgres",
-                "original_name": "describe_table",
-                "sensitivity_tier": "safe",
-                "description": "Describe table columns, types, nullability, and primary keys.",
-                "input_schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "schema": {"type": "string"}}, "required": ["table_name"]},
-            },
-            {
-                "namespaced_name": "postgres__execute_query",
-                "server_id": "postgres",
-                "original_name": "execute_query",
-                "sensitivity_tier": "safe",
-                "description": "Execute an approved read-only SELECT query against PostgreSQL with AST validation.",
-                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "parameters": {"type": "array"}}, "required": ["query"]},
-            },
-            {
-                "namespaced_name": "github__get_repository",
-                "server_id": "github",
-                "original_name": "get_repository",
-                "sensitivity_tier": "safe",
-                "description": "Get metadata for a GitHub repository.",
-                "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}}, "required": ["owner", "repo"]},
-            },
-            {
-                "namespaced_name": "github__list_issues",
-                "server_id": "github",
-                "original_name": "list_issues",
-                "sensitivity_tier": "safe",
-                "description": "List issues for a GitHub repository.",
-                "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "state": {"type": "string"}}, "required": ["owner", "repo"]},
-            },
-            {
-                "namespaced_name": "github__search_repositories",
-                "server_id": "github",
-                "original_name": "search_repositories",
-                "sensitivity_tier": "safe",
-                "description": "Search GitHub repositories by query string.",
-                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-            },
-        ]
+        if not discovered_tools:
+            discovered_tools = [
+                {
+                    "namespaced_name": "filesystem__list_directory",
+                    "server_id": "filesystem",
+                    "original_name": "list_directory",
+                    "sensitivity_tier": "safe",
+                    "description": "List files and subdirectories inside the designated workspace.",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}},
+                },
+                {
+                    "namespaced_name": "filesystem__read_file",
+                    "server_id": "filesystem",
+                    "original_name": "read_file",
+                    "sensitivity_tier": "safe",
+                    "description": "Read file contents securely within designated workspace.",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "encoding": {"type": "string"}}, "required": ["path"]},
+                },
+                {
+                    "namespaced_name": "filesystem__write_file",
+                    "server_id": "filesystem",
+                    "original_name": "write_file",
+                    "sensitivity_tier": "sensitive",
+                    "description": "Atomically write or overwrite a file inside the designated sandbox.",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]},
+                },
+                {
+                    "namespaced_name": "filesystem__search_files",
+                    "server_id": "filesystem",
+                    "original_name": "search_files",
+                    "sensitivity_tier": "safe",
+                    "description": "Search for files matching glob pattern inside sandbox.",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "path": {"type": "string"}}, "required": ["query"]},
+                },
+                {
+                    "namespaced_name": "filesystem__get_file_info",
+                    "server_id": "filesystem",
+                    "original_name": "get_file_info",
+                    "sensitivity_tier": "safe",
+                    "description": "Get detailed metadata for a file or directory inside the sandbox.",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+                },
+                {
+                    "namespaced_name": "postgres__list_tables",
+                    "server_id": "postgres",
+                    "original_name": "list_tables",
+                    "sensitivity_tier": "safe",
+                    "description": "List all public database tables with row estimates.",
+                    "input_schema": {"type": "object", "properties": {"schema": {"type": "string"}}},
+                },
+                {
+                    "namespaced_name": "postgres__describe_table",
+                    "server_id": "postgres",
+                    "original_name": "describe_table",
+                    "sensitivity_tier": "safe",
+                    "description": "Describe table columns, types, nullability, and primary keys.",
+                    "input_schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "schema": {"type": "string"}}, "required": ["table_name"]},
+                },
+                {
+                    "namespaced_name": "postgres__execute_query",
+                    "server_id": "postgres",
+                    "original_name": "execute_query",
+                    "sensitivity_tier": "safe",
+                    "description": "Execute an approved read-only SELECT query against PostgreSQL with AST validation.",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "parameters": {"type": "array"}}, "required": ["query"]},
+                },
+                {
+                    "namespaced_name": "github__get_repository",
+                    "server_id": "github",
+                    "original_name": "get_repository",
+                    "sensitivity_tier": "safe",
+                    "description": "Get metadata for a GitHub repository.",
+                    "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}}, "required": ["owner", "repo"]},
+                },
+                {
+                    "namespaced_name": "github__list_issues",
+                    "server_id": "github",
+                    "original_name": "list_issues",
+                    "sensitivity_tier": "safe",
+                    "description": "List issues for a GitHub repository.",
+                    "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "state": {"type": "string"}}, "required": ["owner", "repo"]},
+                },
+                {
+                    "namespaced_name": "github__search_repositories",
+                    "server_id": "github",
+                    "original_name": "search_repositories",
+                    "sensitivity_tier": "safe",
+                    "description": "Search GitHub repositories by query string.",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+                },
+            ]
 
-    col_cat, col_runner = st.columns([1, 1], gap="large")
+        col_cat, col_runner = st.columns([1, 1], gap="large")
 
-    with col_cat:
-        st.markdown("#### 📋 Discovered Tool Catalog")
-        filter_srv = st.selectbox("Filter by Upstream Server", ["All", "filesystem", "postgres", "github"])
-        filtered_tools = [
-            t for t in discovered_tools
-            if filter_srv == "All" or t.get("server_id") == filter_srv
-        ]
+        with col_cat:
+            st.markdown("#### 📋 Discovered Tool Catalog")
+            filter_srv = st.selectbox("Filter by Upstream Server", ["All", "filesystem", "postgres", "github"])
+            filtered_tools = [
+                t for t in discovered_tools
+                if filter_srv == "All" or t.get("server_id") == filter_srv
+            ]
 
-        for t in filtered_tools:
-            t_name = t.get("namespaced_name")
-            tier = t.get("sensitivity_tier", "safe")
-            badge_html = (
-                '<span class="tier-badge-sensitive">⚠️ SENSITIVE</span>'
-                if tier == "sensitive"
-                else '<span class="tier-badge-safe">🛡️ SAFE</span>'
+            for t in filtered_tools:
+                t_name = t.get("namespaced_name")
+                tier = t.get("sensitivity_tier", "safe")
+                badge_html = (
+                    '<span class="tier-badge-sensitive">⚠️ SENSITIVE</span>'
+                    if tier == "sensitive"
+                    else '<span class="tier-badge-safe">🛡️ SAFE</span>'
+                )
+                with st.expander(f"{t_name} — {t.get('server_id')}"):
+                    st.markdown(f"**Sensitivity Tier**: {badge_html}", unsafe_allow_html=True)
+                    st.markdown(f"**Description**: {t.get('description')}")
+                    st.markdown("**Input Schema**:")
+                    st.json(t.get("input_schema", {}))
+
+        with col_runner:
+            st.markdown("#### ⚡ Interactive Tool Runner")
+            st.caption("Simulate downstream AI client tool calls through ToolBridge's security guardrails.")
+
+            st.markdown("##### ⚡ 1-Click Test Scenarios")
+            q1, q2, q3 = st.columns(3)
+            with q1:
+                if st.button("🗄️ Query Customers", use_container_width=True):
+                    st.session_state["runner_tool"] = "postgres__execute_query"
+                    st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers LIMIT 5;",\n  "parameters": []\n}'
+                    st.session_state["runner_role_idx"] = 0
+                    st.rerun()
+                if st.button("🚨 SQL Injection", use_container_width=True):
+                    st.session_state["runner_tool"] = "postgres__execute_query"
+                    st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers; DROP TABLE orders;",\n  "parameters": []\n}'
+                    st.session_state["runner_role_idx"] = 0
+                    st.rerun()
+            with q2:
+                if st.button("📂 List Workspace", use_container_width=True):
+                    st.session_state["runner_tool"] = "filesystem__list_directory"
+                    st.session_state["runner_args"] = '{\n  "path": ""\n}'
+                    st.session_state["runner_role_idx"] = 0
+                    st.rerun()
+                if st.button("🛑 Path Traversal", use_container_width=True):
+                    st.session_state["runner_tool"] = "filesystem__read_file"
+                    st.session_state["runner_args"] = '{\n  "path": "../../windows/system32/cmd.exe"\n}'
+                    st.session_state["runner_role_idx"] = 0
+                    st.rerun()
+            with q3:
+                if st.button("🐙 Search GitHub", use_container_width=True):
+                    st.session_state["runner_tool"] = "github__search_repositories"
+                    st.session_state["runner_args"] = '{\n  "query": "modelcontextprotocol"\n}'
+                    st.session_state["runner_role_idx"] = 0
+                    st.rerun()
+                if st.button("🔒 RBAC Deny", use_container_width=True):
+                    st.session_state["runner_tool"] = "filesystem__write_file"
+                    st.session_state["runner_args"] = '{\n  "path": "test.txt",\n  "content": "unauthorized attempt",\n  "overwrite": true\n}'
+                    st.session_state["runner_role_idx"] = 2
+                    st.rerun()
+
+            st.markdown("---")
+
+            tool_names = [t["namespaced_name"] for t in discovered_tools]
+            default_tool_idx = 0
+            if "runner_tool" in st.session_state and st.session_state["runner_tool"] in tool_names:
+                default_tool_idx = tool_names.index(st.session_state["runner_tool"])
+
+            selected_tool_name = st.selectbox("Select Tool to Invoke", tool_names, index=default_tool_idx)
+            target_tool = next((t for t in discovered_tools if t["namespaced_name"] == selected_tool_name), None)
+
+            sample_payloads = {
+                "filesystem__list_directory": '{"path": "", "recursive": false}',
+                "filesystem__read_file": '{"path": "sample.txt"}',
+                "filesystem__write_file": '{"path": "test_output.txt", "content": "ToolBridge Gateway execution test.", "overwrite": true}',
+                "filesystem__search_files": '{"query": "*.txt", "path": ""}',
+                "filesystem__get_file_info": '{"path": "sample.txt"}',
+                "postgres__list_tables": '{"schema": "public"}',
+                "postgres__describe_table": '{"table_name": "customers", "schema": "public"}',
+                "postgres__execute_query": '{"query": "SELECT * FROM customers LIMIT 5;", "parameters": []}',
+                "github__get_repository": '{"owner": "modelcontextprotocol", "repo": "python-sdk"}',
+                "github__list_issues": '{"owner": "modelcontextprotocol", "repo": "python-sdk", "state": "open"}',
+                "github__search_repositories": '{"query": "modelcontextprotocol"}',
+            }
+
+            default_args_str = st.session_state.get("runner_args", sample_payloads.get(selected_tool_name, "{}"))
+            if "runner_tool" in st.session_state and st.session_state["runner_tool"] != selected_tool_name:
+                default_args_str = sample_payloads.get(selected_tool_name, "{}")
+                st.session_state["runner_tool"] = selected_tool_name
+                st.session_state["runner_args"] = default_args_str
+
+            args_text = st.text_area("Arguments (JSON)", value=default_args_str, height=120)
+
+            role_options = ["ADMIN", "OPERATOR", "READONLY"]
+            default_role_idx = min(st.session_state.get("runner_role_idx", 0), len(role_options) - 1)
+            sim_role = st.selectbox("Simulated Caller Role", role_options, index=default_role_idx)
+            selected_key = (
+                os.environ.get("TOOLBRIDGE_ADMIN_KEY", "") if "ADMIN" in sim_role
+                else os.environ.get("TOOLBRIDGE_OPERATOR_KEY", "") if "OPERATOR" in sim_role
+                else os.environ.get("TOOLBRIDGE_READONLY_KEY", "")
             )
-            with st.expander(f"{t_name} — {t.get('server_id')}"):
-                st.markdown(f"**Sensitivity Tier**: {badge_html}", unsafe_allow_html=True)
-                st.markdown(f"**Description**: {t.get('description')}")
-                st.markdown("**Input Schema**:")
-                st.json(t.get("input_schema", {}))
 
-    with col_runner:
-        st.markdown("#### ⚡ Interactive Tool Runner")
-        st.caption("Simulate downstream AI client tool calls through ToolBridge's security guardrails.")
+            tier = target_tool.get("sensitivity_tier", "safe") if target_tool else "safe"
+            if tier == "sensitive" and "READONLY" in sim_role:
+                st.warning("⚠️ Policy Warning: Tool is SENSITIVE. Calls from READONLY role will be rejected (HTTP 403) by PolicyEngine.")
 
-        st.markdown("##### ⚡ 1-Click Test Scenarios")
-        q1, q2, q3 = st.columns(3)
-        with q1:
-            if st.button("🗄️ Query Customers", use_container_width=True):
-                st.session_state["runner_tool"] = "postgres__execute_query"
-                st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers LIMIT 5;",\n  "parameters": []\n}'
-                st.session_state["runner_role_idx"] = 0
-                st.rerun()
-            if st.button("🚨 SQL Injection", use_container_width=True):
-                st.session_state["runner_tool"] = "postgres__execute_query"
-                st.session_state["runner_args"] = '{\n  "query": "SELECT * FROM customers; DROP TABLE orders;",\n  "parameters": []\n}'
-                st.session_state["runner_role_idx"] = 0
-                st.rerun()
-        with q2:
-            if st.button("📂 List Workspace", use_container_width=True):
-                st.session_state["runner_tool"] = "filesystem__list_directory"
-                st.session_state["runner_args"] = '{\n  "path": ""\n}'
-                st.session_state["runner_role_idx"] = 0
-                st.rerun()
-            if st.button("🛑 Path Traversal", use_container_width=True):
-                st.session_state["runner_tool"] = "filesystem__read_file"
-                st.session_state["runner_args"] = '{\n  "path": "../../windows/system32/cmd.exe"\n}'
-                st.session_state["runner_role_idx"] = 0
-                st.rerun()
-        with q3:
-            if st.button("🐙 Search GitHub", use_container_width=True):
-                st.session_state["runner_tool"] = "github__search_repositories"
-                st.session_state["runner_args"] = '{\n  "query": "modelcontextprotocol"\n}'
-                st.session_state["runner_role_idx"] = 0
-                st.rerun()
-            if st.button("🔒 RBAC Deny", use_container_width=True):
-                st.session_state["runner_tool"] = "filesystem__write_file"
-                st.session_state["runner_args"] = '{\n  "path": "test.txt",\n  "content": "unauthorized attempt",\n  "overwrite": true\n}'
-                st.session_state["runner_role_idx"] = 2
-                st.rerun()
+            if st.button("🚀 Invoke Tool via Gateway", type="primary"):
+                try:
+                    parsed_args = json.loads(args_text)
+                except json.JSONDecodeError as err:
+                    st.error(f"Invalid JSON in arguments: {err}")
+                    parsed_args = None
 
-        st.markdown("---")
-
-        tool_names = [t["namespaced_name"] for t in discovered_tools]
-        default_tool_idx = 0
-        if "runner_tool" in st.session_state and st.session_state["runner_tool"] in tool_names:
-            default_tool_idx = tool_names.index(st.session_state["runner_tool"])
-
-        selected_tool_name = st.selectbox("Select Tool to Invoke", tool_names, index=default_tool_idx)
-        target_tool = next((t for t in discovered_tools if t["namespaced_name"] == selected_tool_name), None)
-
-        sample_payloads = {
-            "filesystem__list_directory": '{"path": "", "recursive": false}',
-            "filesystem__read_file": '{"path": "sample.txt"}',
-            "filesystem__write_file": '{"path": "test_output.txt", "content": "ToolBridge Gateway execution test.", "overwrite": true}',
-            "filesystem__search_files": '{"query": "*.txt", "path": ""}',
-            "filesystem__get_file_info": '{"path": "sample.txt"}',
-            "postgres__list_tables": '{"schema": "public"}',
-            "postgres__describe_table": '{"table_name": "customers", "schema": "public"}',
-            "postgres__execute_query": '{"query": "SELECT * FROM customers LIMIT 5;", "parameters": []}',
-            "github__get_repository": '{"owner": "modelcontextprotocol", "repo": "python-sdk"}',
-            "github__list_issues": '{"owner": "modelcontextprotocol", "repo": "python-sdk", "state": "open"}',
-            "github__search_repositories": '{"query": "modelcontextprotocol"}',
-        }
-
-        default_args_str = st.session_state.get("runner_args", sample_payloads.get(selected_tool_name, "{}"))
-        if "runner_tool" in st.session_state and st.session_state["runner_tool"] != selected_tool_name:
-            default_args_str = sample_payloads.get(selected_tool_name, "{}")
-            st.session_state["runner_tool"] = selected_tool_name
-            st.session_state["runner_args"] = default_args_str
-
-        args_text = st.text_area("Arguments (JSON)", value=default_args_str, height=120)
-
-        role_options = [
-            "ADMIN (tb-admin-key-999)",
-            "OPERATOR (tb-operator-key-555)",
-            "READONLY (tb-readonly-key-111)",
-        ]
-        default_role_idx = min(st.session_state.get("runner_role_idx", 0), len(role_options) - 1)
-        sim_role = st.selectbox("Simulated Caller Role", role_options, index=default_role_idx)
-        selected_key = (
-            "tb-admin-key-999" if "ADMIN" in sim_role
-            else "tb-operator-key-555" if "OPERATOR" in sim_role
-            else "tb-readonly-key-111"
-        )
-
-        tier = target_tool.get("sensitivity_tier", "safe") if target_tool else "safe"
-        if tier == "sensitive" and "READONLY" in sim_role:
-            st.warning("⚠️ Policy Warning: Tool is SENSITIVE. Calls from READONLY role will be rejected (HTTP 403) by PolicyEngine.")
-
-        if st.button("🚀 Invoke Tool via Gateway", type="primary"):
-            try:
-                parsed_args = json.loads(args_text)
-            except json.JSONDecodeError as err:
-                st.error(f"Invalid JSON in arguments: {err}")
-                parsed_args = None
-
-            if parsed_args is not None:
-                with st.spinner(f"Routing '{selected_tool_name}' through gateway..."):
-                    if health_data:
-                        resp = invoke_api_tool(api_base_url, selected_key, selected_tool_name, parsed_args)
-                    else:
-                        resp = invoke_inprocess_tool(selected_tool_name, parsed_args, sim_role)
-
-                    if resp["success"]:
-                        duration = resp["data"].get("duration_ms", 0)
-                        st.success(f"Tool executed successfully in {duration} ms!")
-                        st.markdown("**Result:**")
-                        st.code(resp["data"].get("result", ""), language="text")
-                    else:
-                        status_code = resp.get("status_code", 500)
-                        detail = resp["data"].get("detail", str(resp["data"]))
-                        if status_code == 403:
-                            st.error(f"🛑 HTTP 403 Forbidden (RBAC Denied): {detail}")
-                        elif status_code == 429:
-                            st.error(f"⏳ HTTP 429 Rate Limited: {detail}")
-                        elif status_code == 400:
-                            st.error(f"❌ HTTP 400 Execution/Guard Failure: {detail}")
+                if parsed_args is not None:
+                    with st.spinner(f"Routing '{selected_tool_name}' through gateway..."):
+                        if health_data:
+                            resp = invoke_api_tool(api_base_url, selected_key, selected_tool_name, parsed_args)
                         else:
-                            st.error(f"Error ({status_code}): {detail}")
+                            resp = invoke_inprocess_tool(selected_tool_name, parsed_args, sim_role)
+
+                        if resp["success"]:
+                            duration = resp["data"].get("duration_ms", 0)
+                            st.success(f"Tool executed successfully in {duration} ms!")
+                            st.markdown("**Result:**")
+                            st.code(resp["data"].get("result", ""), language="text")
+                        else:
+                            status_code = resp.get("status_code", 500)
+                            detail = resp["data"].get("detail", str(resp["data"]))
+                            if status_code == 403:
+                                st.error(f"🛑 HTTP 403 Forbidden (RBAC Denied): {detail}")
+                            elif status_code == 429:
+                                st.error(f"⏳ HTTP 429 Rate Limited: {detail}")
+                            elif status_code == 400:
+                                st.error(f"❌ HTTP 400 Execution/Guard Failure: {detail}")
+                            else:
+                                st.error(f"Error ({status_code}): {detail}")
+
 
 # -----------------------------------------------------------------------------
 # TAB 4: Execution Audit Trail
@@ -799,70 +817,72 @@ with tab_audit:
     st.subheader("Persistent Execution Audit Trail")
     st.caption("All gateway tool invocations are scrubbed of secrets and logged to SQLite for compliance and forensic analysis.")
 
-    st.markdown(
-        """
-        > **🛡️ Secret Scrubbing Active**: Sensitive fields (API tokens, passwords, bearer tokens) 
-        > are automatically replaced with `***REDACTED***` prior to writing to the audit database.
-        """
-    )
+    if render_auth_gate_warning("Execution Audit Trail"):
+        st.markdown(
+            """
+            > **🛡️ Secret Scrubbing Active**: Sensitive fields (API tokens, passwords, bearer tokens) 
+            > are automatically replaced with `***REDACTED***` prior to writing to the audit database.
+            """
+        )
 
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        status_filter = st.selectbox("Filter Status", ["All", "SUCCESS", "ERROR", "UNAUTHORIZED", "RATE_LIMITED"])
-    with f2:
-        tool_filter = st.text_input("Filter Tool Name", placeholder="e.g. filesystem__")
-    with f3:
-        caller_filter = st.text_input("Filter Caller ID", placeholder="e.g. agent-")
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            status_filter = st.selectbox("Filter Status", ["All", "SUCCESS", "ERROR", "UNAUTHORIZED", "RATE_LIMITED"])
+        with f2:
+            tool_filter = st.text_input("Filter Tool Name", placeholder="e.g. filesystem__")
+        with f3:
+            caller_filter = st.text_input("Filter Caller ID", placeholder="e.g. agent-")
 
-    filtered_logs = all_logs
-    if status_filter != "All":
-        filtered_logs = [l for l in filtered_logs if l.status == status_filter]
-    if tool_filter:
-        filtered_logs = [l for l in filtered_logs if tool_filter.lower() in l.tool_name.lower()]
-    if caller_filter:
-        filtered_logs = [l for l in filtered_logs if caller_filter.lower() in l.caller_id.lower()]
+        filtered_logs = all_logs
+        if status_filter != "All":
+            filtered_logs = [l for l in filtered_logs if l.status == status_filter]
+        if tool_filter:
+            filtered_logs = [l for l in filtered_logs if tool_filter.lower() in l.tool_name.lower()]
+        if caller_filter:
+            filtered_logs = [l for l in filtered_logs if caller_filter.lower() in l.caller_id.lower()]
 
-    if not filtered_logs:
-        st.info("No audit logs matching current filter.")
-    else:
-        table_rows = []
-        for l in filtered_logs:
-            table_rows.append({
-                "ID": l.id,
-                "Timestamp (UTC)": l.timestamp.strftime("%Y-%m-%d %H:%M:%S") if l.timestamp else "-",
-                "Status": l.status,
-                "Tool Name": l.tool_name,
-                "Caller": f"{l.caller_id} ({l.caller_role})",
-                "Latency (ms)": l.duration_ms,
-                "Arguments (Sanitized)": l.arguments_json,
-                "Response Summary": l.response_summary,
-            })
-        df_logs = pd.DataFrame(table_rows)
-        st.dataframe(df_logs, hide_index=True)
+        if not filtered_logs:
+            st.info("No audit logs matching current filter.")
+        else:
+            table_rows = []
+            for l in filtered_logs:
+                table_rows.append({
+                    "ID": l.id,
+                    "Timestamp (UTC)": l.timestamp.strftime("%Y-%m-%d %H:%M:%S") if l.timestamp else "-",
+                    "Status": l.status,
+                    "Tool Name": l.tool_name,
+                    "Caller": f"{l.caller_id} ({l.caller_role})",
+                    "Latency (ms)": l.duration_ms,
+                    "Arguments (Sanitized)": l.arguments_json,
+                    "Response Summary": l.response_summary,
+                })
+            df_logs = pd.DataFrame(table_rows)
+            st.dataframe(df_logs, hide_index=True)
 
-    st.markdown("#### 🔍 Deep Record Inspector")
-    log_ids = [l.id for l in filtered_logs if l.id is not None]
-    if log_ids:
-        sel_id = st.selectbox("Select Record ID to Inspect", log_ids)
-        rec = next((l for l in filtered_logs if l.id == sel_id), None)
-        if rec:
-            ic1, ic2 = st.columns([1, 1])
-            with ic1:
-                st.markdown(f"**Event ID**: `#{rec.id}`")
-                st.markdown(f"**Timestamp**: `{rec.timestamp}`")
-                st.markdown(f"**Caller ID**: `{rec.caller_id}` (`{rec.caller_role}`)")
-                st.markdown(f"**Target Tool**: `{rec.tool_name}` on server `{rec.server_id}`")
-                st.markdown(f"**Status**: `{rec.status}`")
-                st.markdown(f"**Duration**: `{rec.duration_ms} ms`")
-            with ic2:
-                st.markdown("**Sanitized Arguments JSON**:")
-                try:
-                    parsed_args = json.loads(rec.arguments_json)
-                    st.json(parsed_args)
-                except Exception:
-                    st.code(rec.arguments_json)
-                st.markdown("**Response / Error Summary**:")
-                st.info(rec.response_summary or "No summary recorded.")
+        st.markdown("#### 🔍 Deep Record Inspector")
+        log_ids = [l.id for l in filtered_logs if l.id is not None]
+        if log_ids:
+            sel_id = st.selectbox("Select Record ID to Inspect", log_ids)
+            rec = next((l for l in filtered_logs if l.id == sel_id), None)
+            if rec:
+                ic1, ic2 = st.columns([1, 1])
+                with ic1:
+                    st.markdown(f"**Event ID**: `#{rec.id}`")
+                    st.markdown(f"**Timestamp**: `{rec.timestamp}`")
+                    st.markdown(f"**Caller ID**: `{rec.caller_id}` (`{rec.caller_role}`)")
+                    st.markdown(f"**Target Tool**: `{rec.tool_name}` on server `{rec.server_id}`")
+                    st.markdown(f"**Status**: `{rec.status}`")
+                    st.markdown(f"**Duration**: `{rec.duration_ms} ms`")
+                with ic2:
+                    st.markdown("**Sanitized Arguments JSON**:")
+                    try:
+                        parsed_args = json.loads(rec.arguments_json)
+                        st.json(parsed_args)
+                    except Exception:
+                        st.code(rec.arguments_json)
+                    st.markdown("**Response / Error Summary**:")
+                    st.info(rec.response_summary or "No summary recorded.")
+
 
 # -----------------------------------------------------------------------------
 # TAB 5: Telemetry & Statistics

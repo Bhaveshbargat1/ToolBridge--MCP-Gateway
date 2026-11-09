@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -132,6 +133,20 @@ TOOL_SEARCH_FILES = Tool(
                 "default": 50,
                 "minimum": 1,
                 "maximum": 500,
+            },
+            "max_depth": {
+                "type": "integer",
+                "description": "Maximum directory traversal depth (1-10, default: 5).",
+                "default": 5,
+                "minimum": 1,
+                "maximum": 10,
+            },
+            "timeout_seconds": {
+                "type": "number",
+                "description": "Maximum wall-clock execution time in seconds (default: 5.0, max: 15.0).",
+                "default": 5.0,
+                "minimum": 0.1,
+                "maximum": 15.0,
             },
         },
         "required": ["query"],
@@ -272,14 +287,32 @@ class FilesystemMCPServer:
         if not safe_path.is_file():
             return self._error_result(f"Target is not a regular file: '{untrusted_path}'")
 
+        if safe_path.is_symlink():
+            return self._error_result(f"Target is a symlink: '{untrusted_path}'")
+
         file_size = safe_path.stat().st_size
         if file_size > max_bytes:
             return self._error_result(
                 f"File size ({file_size} bytes) exceeds the allowed limit ({max_bytes} bytes)."
             )
 
+        open_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            open_flags |= os.O_NOFOLLOW
+
         try:
-            content = safe_path.read_text(encoding=encoding, errors="strict")
+            fd = os.open(str(safe_path), open_flags)
+            try:
+                with open(fd, mode="r", encoding=encoding, errors="strict", closefd=False) as f:
+                    content = f.read(max_bytes + 1)
+                    if len(content.encode(encoding)) > max_bytes:
+                        return self._error_result(
+                            f"File size exceeds the allowed limit ({max_bytes} bytes)."
+                        )
+            finally:
+                os.close(fd)
+        except OSError as e:
+            return self._error_result(f"Failed to read file: {e}")
         except UnicodeDecodeError as e:
             return self._error_result(
                 f"Binary or unsupported encoding: Unable to decode file as '{encoding}': {e}"
@@ -302,7 +335,10 @@ class FilesystemMCPServer:
 
         safe_path = self.guard.resolve_safe_path(untrusted_path, must_exist=False, allow_root=False)
 
-        # Check existing file overwrite policy
+        # Check existing file overwrite policy and reject existing symlinks
+        if safe_path.is_symlink():
+            raise PathSecurityError(f"Target path '{untrusted_path}' is a symlink. Overwriting symlinks is prohibited.")
+
         if safe_path.exists():
             if not overwrite:
                 raise FileExistsError(f"File already exists and overwrite=False: '{untrusted_path}'")
@@ -324,23 +360,29 @@ class FilesystemMCPServer:
                 f"Content size ({len(content_bytes)} bytes) exceeds max limit ({self.guard.max_file_size_bytes} bytes)."
             )
 
-        # Atomic write: write to temp file inside sandbox parent, then replace
-        temp_file = tempfile.NamedTemporaryFile(
-            mode="w",
+        # Atomic write: use tempfile.mkstemp inside parent directory, fsync, then replace
+        fd, tmp_path_str = tempfile.mkstemp(
             dir=parent_dir,
-            delete=False,
-            encoding="utf-8",
+            prefix=".tb_atomic_",
+            suffix=".tmp",
         )
         try:
-            temp_file.write(content)
-            temp_file.flush()
-            os.fsync(temp_file.fileno())
-            temp_file.close()
-            # Atomic rename / replace
-            os.replace(temp_file.name, safe_path)
+            with open(fd, "w", encoding="utf-8", closefd=True) as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Double-check target is not a symlink right before atomic replace
+            if safe_path.is_symlink():
+                raise PathSecurityError(f"Target path '{untrusted_path}' is a symlink. Overwriting symlinks is prohibited.")
+
+            os.replace(tmp_path_str, safe_path)
         except Exception:
-            if os.path.exists(temp_file.name):
-                os.unlink(temp_file.name)
+            if os.path.exists(tmp_path_str):
+                try:
+                    os.unlink(tmp_path_str)
+                except OSError:
+                    pass
             raise
 
         res_info = {
@@ -360,15 +402,32 @@ class FilesystemMCPServer:
         search_path = args.get("path", "")
         search_content = bool(args.get("search_content", False))
         max_results = min(max(int(args.get("max_results", 50)), 1), 500)
+        max_depth = min(max(int(args.get("max_depth", 5)), 1), 10)
+        timeout_seconds = min(max(float(args.get("timeout_seconds", 5.0)), 0.1), 15.0)
+        start_time = time.monotonic()
 
         safe_start = self.guard.resolve_safe_path(search_path, must_exist=True)
         if not safe_start.is_dir():
             safe_start = safe_start.parent
 
         matches: list[dict[str, Any]] = []
+        timed_out = False
+        base_depth = len(safe_start.parts)
 
-        for root, _, files in os.walk(safe_start):
+        for root, dirs, files in os.walk(safe_start):
+            current_depth = len(Path(root).parts) - base_depth
+            if current_depth >= max_depth:
+                dirs.clear()  # Do not descend further
+
+            if time.monotonic() - start_time > timeout_seconds:
+                timed_out = True
+                break
+
             for filename in sorted(files):
+                if time.monotonic() - start_time > timeout_seconds:
+                    timed_out = True
+                    break
+
                 if len(matches) >= max_results:
                     break
 
@@ -411,13 +470,14 @@ class FilesystemMCPServer:
                     except Exception:
                         continue
 
-            if len(matches) >= max_results:
+            if len(matches) >= max_results or timed_out:
                 break
 
         payload = {
             "query": query,
             "search_content": search_content,
             "total_matches": len(matches),
+            "timed_out": timed_out,
             "results": matches,
         }
         return self._success_result(json.dumps(payload, indent=2))

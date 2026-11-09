@@ -59,13 +59,14 @@ CREATE USER mcp_readonly WITH PASSWORD 'SecureReadOnlyPass123!';
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO mcp_readonly;
 
--- Grant SELECT only on current tables
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_readonly;
+-- Revoke all table access by default, then grant SELECT only on explicit table allowlist
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM mcp_readonly;
+GRANT SELECT ON customers, orders, products TO mcp_readonly;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO mcp_readonly;
 
--- Ensure all future tables created in public are also automatically SELECT only
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mcp_readonly;
+-- Ensure mcp_readonly has NO superuser or server-level file access roles
+REVOKE pg_read_server_files, pg_write_server_files, pg_execute_server_program FROM mcp_readonly;
 
--- Lock down session characteristics for this user to default to READ ONLY
-ALTER USER mcp_readonly SET default_transaction_read_only = on;
-ALTER USER mcp_readonly SET statement_timeout = '15s';
+-- Lock down session characteristics for this user to default to READ ONLY and statement timeout
+ALTER ROLE mcp_readonly SET default_transaction_read_only = on;
+ALTER ROLE mcp_readonly SET statement_timeout = '10s';

@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 from enum import Enum
+import json
+import logging
+import os
 from typing import Final
+
+logger = logging.getLogger("toolbridge.security.policy")
 
 
 class UserRole(str, Enum):
@@ -18,7 +23,11 @@ class SensitivityTier(str, Enum):
     SENSITIVE = "SENSITIVE"  # Mutating, file-writing, or state-changing tools
 
 
-# Default sensitivity classifications for known tools
+# Default sensitivity classifications for known tools.
+# Security Note on postgres__execute_query:
+# While classified as SAFE from a SQL mutation perspective (DDL/DML mutations are strictly
+# blocked by SQLSecurityGuard and database transaction read-only configuration), SELECT
+# queries still represent a data-exfiltration vector if sensitive schemas/tables are accessible.
 _SENSITIVITY_MAP: Final[dict[str, SensitivityTier]] = {
     # Filesystem
     "filesystem__read_file": SensitivityTier.SAFE,
@@ -29,12 +38,25 @@ _SENSITIVITY_MAP: Final[dict[str, SensitivityTier]] = {
     # Postgres
     "postgres__list_tables": SensitivityTier.SAFE,
     "postgres__describe_table": SensitivityTier.SAFE,
-    "postgres__execute_query": SensitivityTier.SAFE,
+    "postgres__execute_query": SensitivityTier.SAFE,  # SAFE for mutation, but data-exfiltration risk
     # GitHub
     "github__get_repository": SensitivityTier.SAFE,
     "github__list_issues": SensitivityTier.SAFE,
     "github__search_repositories": SensitivityTier.SAFE,
 }
+
+
+def _get_role_allowlists() -> dict[str, set[str]]:
+    """Load optional config-driven per-role allowlists from TOOLBRIDGE_ROLE_ALLOWLIST env var (JSON)."""
+    raw = os.environ.get("TOOLBRIDGE_ROLE_ALLOWLIST", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return {k.lower(): set(v) for k, v in data.items() if isinstance(v, list)}
+    except Exception as e:
+        logger.warning(f"Failed to parse TOOLBRIDGE_ROLE_ALLOWLIST: {e}")
+        return {}
 
 
 class PolicyEngine:
@@ -50,15 +72,24 @@ class PolicyEngine:
         """Check whether a user role is permitted to invoke a tool.
 
         Rules:
-        - ADMIN: Permitted for all tools.
+        - ADMIN: Permitted for all tools (unless explicitly restricted by role allowlist).
         - OPERATOR: Permitted for SAFE and SENSITIVE tools.
         - READONLY: Permitted ONLY for SAFE tools.
+        - Optional config-driven allowlists (TOOLBRIDGE_ROLE_ALLOWLIST) override defaults.
 
         Returns:
             Tuple of (is_allowed: bool, reason: str).
         """
         role_val = (role.value if hasattr(role, "value") else str(role)).lower()
         tier = cls.get_tool_sensitivity(tool_name)
+
+        # Check optional config-driven per-role allowlist first
+        allowlists = _get_role_allowlists()
+        if role_val in allowlists:
+            role_allowed = allowlists[role_val]
+            server_id = tool_name.split("__", 1)[0] if "__" in tool_name else ""
+            if tool_name not in role_allowed and server_id not in role_allowed and "*" not in role_allowed:
+                return False, f"Permission Denied: Tool '{tool_name}' is not in the configured allowlist for role '{role_val}'."
 
         if role_val == UserRole.ADMIN.value:
             return True, "Authorized as Admin."

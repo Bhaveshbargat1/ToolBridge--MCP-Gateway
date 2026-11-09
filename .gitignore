@@ -26,6 +26,10 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+data/*.db-wal
+data/*.db-shm
 data/
 
 # Workspace sandbox temporary files (keep directory tracked)

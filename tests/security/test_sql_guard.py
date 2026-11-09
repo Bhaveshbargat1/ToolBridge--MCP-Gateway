@@ -96,3 +96,56 @@ def test_empty_or_excessive_length_query_rejected(guard: SQLSecurityGuard):
     oversized = "SELECT * FROM users WHERE " + "x = 1 AND " * 200
     with pytest.raises(SQLSecurityError, match="exceeds maximum allowed length"):
         guard.validate_read_only_query(oversized)
+
+
+# ==============================================================================
+# B4 Bypass Corpus Tests
+# ==============================================================================
+
+@pytest.mark.security
+@pytest.mark.parametrize("bypass_query", [
+    # 1. set_config bypasses
+    "SELECT set_config('default_transaction_read_only', 'off', false)",
+    "SELECT pg_catalog.set_config('default_transaction_read_only', 'off', false)",
+    'SELECT "set_config"(\'default_transaction_read_only\', \'off\', false)',
+    # 2. Data-modifying CTEs
+    "WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING *) SELECT * FROM deleted",
+    "WITH inserted AS (INSERT INTO users (id, name) VALUES (9, 'backdoor') RETURNING *) SELECT * FROM inserted",
+    "WITH updated AS (UPDATE users SET role = 'admin' RETURNING *) SELECT * FROM updated",
+    # 3. Quoted and schema-qualified identifiers
+    'SELECT * FROM public."pg_read_file"(\'config.json\')',
+    'SELECT * FROM pg_catalog.pg_ls_dir(\'/\')',
+    'SELECT "dblink"(\'dbname=other\', \'SELECT 1\')',
+    'SELECT dblink_exec(\'dbname=other\', \'DROP TABLE users\')',
+    'SELECT query_to_xml(\'SELECT * FROM users\', true, false, \'\')',
+    # 4. Comments attempting to break tokens
+    "SELECT /* comment */ set_config('x', 'y', false)",
+    "WITH x AS (/* mutate */ DELETE FROM users) SELECT 1",
+    # 5. Unicode / homoglyph bypasses
+    "ＳＥＬＥＣＴ set_config('a', 'b', false)",
+    # 6. Row locking clauses
+    "SELECT * FROM accounts WHERE id = 1 FOR UPDATE",
+    "SELECT * FROM accounts WHERE id = 1 FOR SHARE",
+    # 7. SQLite commands
+    "ATTACH DATABASE 'evil.db' AS evil",
+    "DETACH DATABASE evil",
+    "SELECT load_extension('exploit.so')",
+    "PRAGMA table_info(users)",
+    "VACUUM",
+    # 8. Stacked queries
+    "SELECT 1; SELECT set_config('default_transaction_read_only', 'off', false)",
+    "SELECT 1; -- comment\nDROP TABLE users",
+])
+def test_sql_guard_bypass_corpus(guard: SQLSecurityGuard, bypass_query: str):
+    """Verify bypass corpus attacks are rejected by SQLSecurityGuard."""
+    with pytest.raises(SQLSecurityError):
+        guard.validate_read_only_query(bypass_query)
+
+
+@pytest.mark.security
+def test_sql_guard_allows_string_literals_with_keywords(guard: SQLSecurityGuard):
+    """Ensure legitimate string literals containing keywords are not falsely blocked."""
+    safe_with_keyword_literal = "SELECT * FROM orders WHERE status = 'DELETE' AND notes = 'UPDATE'"
+    validated = guard.validate_read_only_query(safe_with_keyword_literal)
+    assert "status = 'DELETE'" in validated
+

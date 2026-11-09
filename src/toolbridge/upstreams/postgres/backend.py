@@ -86,7 +86,7 @@ class PostgresBackend(DatabaseBackend):
     async def _init_connection(self, conn: asyncpg.Connection) -> None:
         """Database-level defense-in-depth: enforce transaction read-only mode."""
         await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
-        await conn.execute("SET statement_timeout = 15000;")  # 15s server-level timeout
+        await conn.execute("SET statement_timeout = 10000;")  # 10s server-level timeout
 
     async def connect(self) -> None:
         """Create asyncpg connection pool with connection initialization hooks."""
@@ -163,16 +163,22 @@ class PostgresBackend(DatabaseBackend):
 
         async with self._pool.acquire() as conn:
             try:
-                records = await asyncio.wait_for(
-                    conn.fetch(query, *params),
-                    timeout=timeout_seconds,
-                )
+                async with conn.transaction(readonly=True):
+                    records = await asyncio.wait_for(
+                        conn.fetch(query, *params),
+                        timeout=timeout_seconds,
+                    )
             except asyncio.TimeoutError:
                 raise DatabaseQueryTimeoutError(
                     f"Query execution timed out after {timeout_seconds} seconds."
                 )
             except asyncpg.PostgresError as e:
                 raise RuntimeError(f"PostgreSQL Execution Error: {e}") from e
+            finally:
+                try:
+                    await conn.execute("DISCARD ALL;")
+                except Exception:
+                    pass
 
             limited = records[:max_rows]
             return [dict(r) for r in limited]

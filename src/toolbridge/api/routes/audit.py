@@ -22,7 +22,7 @@ async def query_audit_logs(
     limit: int = Query(default=50, ge=1, le=200, description="Max logs to return"),
     offset: int = Query(default=0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db_session),
-    user: AuthenticatedUser = Depends(require_role(UserRole.OPERATOR)),
+    user: AuthenticatedUser = Depends(require_role(UserRole.ADMIN)),
 ):
     """Search and inspect sanitized execution audit logs (Operator or Admin only)."""
     logs = await AuditService.query_logs(
@@ -53,7 +53,7 @@ async def seed_audit_records():
 async def get_audit_log_by_id(
     log_id: int,
     db: AsyncSession = Depends(get_db_session),
-    user: AuthenticatedUser = Depends(require_role(UserRole.OPERATOR)),
+    user: AuthenticatedUser = Depends(require_role(UserRole.ADMIN)),
 ):
     """Retrieve a single audit log entry by ID."""
     stmt = select(AuditLogRecord).where(AuditLogRecord.id == log_id)

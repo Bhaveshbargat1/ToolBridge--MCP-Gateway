@@ -39,6 +39,30 @@ def test_bearer_and_github_tokens_scrubbed_in_strings():
 
 
 @pytest.mark.unit
+def test_extended_secrets_scrubbed_in_strings():
+    """Verify github_pat_, gho_, sk-*, AKIA*, and connection strings are masked."""
+    samples = [
+        ("github_pat_11ABCDEF0123456789abcdefghijklmnopqrstuvwxyz", "github_pat_[REDACTED]"),
+        ("gho_16DigitsAndMoreSecretTokenABC", "ghp_[REDACTED]"),
+        ("sk-proj-abc12345678901234567890", "sk-[REDACTED]"),
+        ("sk-ant-api03-abcdefghijklmnopqrstuvwx", "sk-[REDACTED]"),
+        ("AKIAIOSFODNN7EXAMPLE", "AKIA[REDACTED]"),
+        (
+            "postgresql://mcp_user:SecretP@ssw0rd!@localhost:5432/toolbridge_demo",
+            "postgresql://mcp_user:[REDACTED]@localhost:5432/toolbridge_demo",
+        ),
+    ]
+    for raw, expected in samples:
+        res = SecretSanitizer.sanitize(raw)
+        assert expected in res
+        # Ensure original secret value is not present
+        if "@" in raw:
+            assert "SecretP@ssw0rd!" not in res
+        else:
+            assert raw not in res
+
+
+@pytest.mark.unit
 def test_to_sanitized_json():
     """Verify serialization to sanitized JSON string."""
     data = {"secret_key": "12345", "query": "SELECT * FROM users"}

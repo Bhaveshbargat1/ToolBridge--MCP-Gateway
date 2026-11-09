@@ -253,3 +253,67 @@ async def test_stdio_filesystem_server_e2e(tmp_path: Path):
             attack_res = await session.call_tool("read_file", {"path": "../../outside.txt"})
             assert attack_res.is_error is True
             assert "Security Violation" in attack_res.content[0].text
+
+
+@pytest.mark.security
+@pytest.mark.asyncio
+async def test_search_files_bounds_and_depth(fs_server):
+    """Verify search_files enforces depth bounds and result count limits."""
+    server_app, sandbox = fs_server
+
+    # Create deep nested structure
+    deep_path = sandbox / "a" / "b" / "c" / "d" / "e" / "f"
+    deep_path.mkdir(parents=True)
+    (deep_path / "deep_target.txt").write_text("deep content", encoding="utf-8")
+
+    # Search with max_depth=2 should NOT find deep_target.txt
+    res = await server_app._handle_call_tool(
+        None,
+        CallToolRequestParams(
+            name="search_files",
+            arguments={"query": "deep_target.txt", "max_depth": 2},
+        ),
+    )
+    assert res.is_error is False
+    data = json.loads(res.content[0].text)
+    assert data["total_matches"] == 0
+
+    # Search with max_depth=10 should find it
+    res2 = await server_app._handle_call_tool(
+        None,
+        CallToolRequestParams(
+            name="search_files",
+            arguments={"query": "deep_target.txt", "max_depth": 10},
+        ),
+    )
+    assert res2.is_error is False
+    data2 = json.loads(res2.content[0].text)
+    assert data2["total_matches"] == 1
+
+
+@pytest.mark.security
+@pytest.mark.asyncio
+async def test_write_file_refuses_symlink_overwrite(fs_server, monkeypatch):
+    """Verify write_file strictly refuses to overwrite symlink destinations."""
+    server_app, _ = fs_server
+
+    # Mock Path.is_symlink to simulate symlink destination
+    real_is_symlink = Path.is_symlink
+
+    def mock_is_symlink(self):
+        if self.name == "symlink_file.txt":
+            return True
+        return real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", mock_is_symlink)
+
+    res = await server_app._handle_call_tool(
+        None,
+        CallToolRequestParams(
+            name="write_file",
+            arguments={"path": "symlink_file.txt", "content": "malicious payload"},
+        ),
+    )
+    assert res.is_error is True
+    assert "symlink" in res.content[0].text.lower()
+

@@ -16,6 +16,7 @@ from toolbridge.client.registry import ServerRegistry
 from toolbridge.db.session import init_db
 from toolbridge.models.server import TransportType, UpstreamServerConfig
 from toolbridge.router.dispatcher import ToolRouter
+from toolbridge.security.guards.filesystem import resolve_sandbox_root
 from toolbridge.security.rate_limiter import RateLimitExceededError, SlidingWindowRateLimiter
 
 logger = logging.getLogger("toolbridge.api")
@@ -24,6 +25,10 @@ logger = logging.getLogger("toolbridge.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application startup and shutdown lifecycle."""
+    # 0. Enforce API key configuration at startup - fail fast if missing or insecure
+    from toolbridge.api.auth import get_configured_api_keys
+    get_configured_api_keys()
+
     logger.info("Initializing ToolBridge Management Service & Database...")
     await init_db()
 
@@ -33,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     servers = await registry.get_all_servers()
     if not servers:
-        fs_sandbox = os.environ.get("FILESYSTEM_SANDBOX_ROOT", "./workspace_sandbox")
+        fs_sandbox = str(resolve_sandbox_root())
         await registry.register_server(UpstreamServerConfig(
             id="filesystem",
             name="Sandboxed Filesystem Server",
@@ -112,14 +117,39 @@ def create_app(
     # Mount Static Web App Frontend
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.exists(static_dir):
-        from fastapi.responses import FileResponse
+        from fastapi.responses import HTMLResponse
         from fastapi.staticfiles import StaticFiles
 
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-        @app.get("/", include_in_schema=False)
+        @app.get("/", include_in_schema=False, response_class=HTMLResponse)
         async def serve_index():
-            return FileResponse(os.path.join(static_dir, "index.html"))
+            index_path = os.path.join(static_dir, "index.html")
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                return HTMLResponse(content="<h1>ToolBridge Web Control Center</h1>", status_code=200)
+
+            # Inject active keys for local web console session
+            admin_k = os.environ.get("TOOLBRIDGE_ADMIN_KEY", "")
+            oper_k = os.environ.get("TOOLBRIDGE_OPERATOR_KEY", "")
+            ro_k = os.environ.get("TOOLBRIDGE_READONLY_KEY", "")
+            dev_script = (
+                f'<script id="tb-env-keys">\n'
+                f'  window.__TOOLBRIDGE_DEV_KEYS__ = {{\n'
+                f'    admin: "{admin_k}",\n'
+                f'    operator: "{oper_k}",\n'
+                f'    readonly: "{ro_k}"\n'
+                f'  }};\n'
+                f'</script>\n'
+            )
+            if "</head>" in content:
+                content = content.replace("</head>", f"{dev_script}</head>", 1)
+            else:
+                content = dev_script + content
+
+            return HTMLResponse(content=content, media_type="text/html")
 
     return app
 

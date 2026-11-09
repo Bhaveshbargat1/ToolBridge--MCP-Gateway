@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import os
-import sys
-from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.types import CallToolResult, TextContent
+from mcp.types import (
+    CallToolResult,
+    CancelledNotification,
+    CancelledNotificationParams,
+    TextContent,
+    ToolListChangedNotification,
+)
 
 from toolbridge.client.discovery import ToolDiscoveryEngine
 from toolbridge.client.registry import ServerRegistry
@@ -19,14 +24,32 @@ from toolbridge.models.server import ServerStatus, TransportType, UpstreamServer
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _UpstreamWorkerState:
+    """Tracks state and dedicated lifecycle task for a connected upstream server."""
+    task: asyncio.Task[None]
+    stop_event: asyncio.Event
+    session: ClientSession | None = None
+    timeout_failures: int = 0
+
+
 class MCPClientManager:
-    """Manages the connection lifecycle, discovery, and execution for all upstream MCP servers."""
+    """Manages the connection lifecycle, discovery, and execution for all upstream MCP servers.
+
+    Each connected upstream server is owned by exactly ONE dedicated asyncio task to ensure
+    that anyio cancel scopes (in stdio_client and ClientSession) are entered and exited
+    within the same task context, eliminating 'Attempted to exit cancel scope in a different task' errors.
+    """
 
     def __init__(self, registry: ServerRegistry | None = None) -> None:
         self.registry = registry or ServerRegistry()
-        self._stacks: dict[str, AsyncExitStack] = {}
-        self._sessions: dict[str, ClientSession] = {}
+        self._workers: dict[str, _UpstreamWorkerState] = {}
         self._lock = asyncio.Lock()
+
+    @property
+    def _sessions(self) -> dict[str, ClientSession]:
+        """Backward-compatible mapping of active sessions."""
+        return {s_id: w.session for s_id, w in self._workers.items() if w.session is not None}
 
     @property
     def active_server_ids(self) -> list[str]:
@@ -36,11 +59,7 @@ class MCPClientManager:
     async def connect_server(self, server_id: str) -> bool:
         """Establish an MCP connection with an upstream server and discover its tools.
 
-        Args:
-            server_id: Identifier of the registered server.
-
-        Returns:
-            True if connection and discovery succeeded, False otherwise.
+        Spawns a dedicated owner task and awaits the initialization handshake.
         """
         async with self._lock:
             server_info = await self.registry.get_server(server_id)
@@ -54,50 +73,127 @@ class MCPClientManager:
                 return False
 
             # If already connected, disconnect first for clean reconnection
-            if server_id in self._stacks:
-                await self._disconnect_server_internal(server_id)
+            if server_id in self._workers:
+                await self._disconnect_worker(server_id)
 
             await self.registry.update_status(server_id, ServerStatus.CONNECTING)
-            stack = AsyncExitStack()
+            ready_event = asyncio.Event()
+            stop_event = asyncio.Event()
+
+            task = asyncio.create_task(
+                self._run_upstream_worker(
+                    server_id=server_id,
+                    config=config,
+                    ready_event=ready_event,
+                    stop_event=stop_event,
+                ),
+                name=f"upstream-worker-{server_id}",
+            )
+
+            self._workers[server_id] = _UpstreamWorkerState(
+                task=task,
+                stop_event=stop_event,
+                session=None,
+            )
 
             try:
-                if config.transport == TransportType.STDIO:
-                    if not config.command:
-                        raise ValueError(f"Server '{server_id}' specifies stdio transport but no command.")
-
-                    env = {**os.environ, **config.env, "PYTHONUNBUFFERED": "1"}
-                    params = StdioServerParameters(
-                        command=config.command,
-                        args=config.args,
-                        env=env,
-                    )
-                    read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+                timeout = config.timeout_seconds + 5.0
+                await asyncio.wait_for(ready_event.wait(), timeout=timeout)
+                worker = self._workers.get(server_id)
+                if worker and worker.session and not task.done():
+                    logger.info(f"Successfully connected to upstream server '{server_id}'.")
+                    return True
                 else:
-                    raise NotImplementedError(
-                        f"Transport '{config.transport}' is not yet supported in ClientManager."
-                    )
-
-                # Initialize MCP Client Session
-                session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
-                await asyncio.wait_for(session.initialize(), timeout=config.timeout_seconds)
-
-                # Introspect and discover tools
-                tools = await ToolDiscoveryEngine.discover_tools(session, server_id)
-
-                self._stacks[server_id] = stack
-                self._sessions[server_id] = session
-
-                await self.registry.update_status(server_id, ServerStatus.CONNECTED)
-                await self.registry.register_tools(server_id, tools)
-                logger.info(f"Successfully connected to upstream server '{server_id}' with {len(tools)} tools.")
-                return True
-
-            except Exception as e:
-                logger.error(f"Failed to connect to upstream server '{server_id}': {e}", exc_info=True)
-                await stack.aclose()
-                await self.registry.update_status(server_id, ServerStatus.FAILED, error=str(e))
-                await self.registry.clear_server_tools(server_id)
+                    logger.error(f"Worker for '{server_id}' terminated before readiness.")
+                    await self._disconnect_worker(server_id)
+                    return False
+            except asyncio.TimeoutError:
+                logger.error(f"Connection timeout waiting for server '{server_id}' to start.")
+                await self._disconnect_worker(server_id)
+                await self.registry.update_status(server_id, ServerStatus.FAILED, error="Connection timeout")
                 return False
+
+    async def _run_upstream_worker(
+        self,
+        server_id: str,
+        config: UpstreamServerConfig,
+        ready_event: asyncio.Event,
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Dedicated long-lived owner task for stdio_client and ClientSession."""
+        if config.transport != TransportType.STDIO:
+            err_msg = f"Transport '{config.transport}' is not yet supported in ClientManager."
+            logger.error(err_msg)
+            await self.registry.update_status(server_id, ServerStatus.FAILED, error=err_msg)
+            ready_event.set()
+            return
+
+        if not config.command:
+            err_msg = f"Server '{server_id}' specifies stdio transport but no command."
+            logger.error(err_msg)
+            await self.registry.update_status(server_id, ServerStatus.FAILED, error=err_msg)
+            ready_event.set()
+            return
+
+        safe_env_keys = {
+            "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP",
+            "HOME", "USERPROFILE", "PYTHONPATH", "LANG", "LC_ALL",
+        }
+        base_env = {k: v for k, v in os.environ.items() if k in safe_env_keys}
+        env = {**base_env, **config.env, "PYTHONUNBUFFERED": "1"}
+
+        params = StdioServerParameters(
+            command=config.command,
+            args=config.args,
+            env=env,
+        )
+
+        async def _notification_handler(notification: Any) -> None:
+            # Handle upstream notifications/tools/list_changed
+            if isinstance(notification, ToolListChangedNotification):
+                logger.info(f"Upstream server '{server_id}' notified tools/list_changed. Refreshing catalog...")
+                worker = self._workers.get(server_id)
+                if worker and worker.session:
+                    try:
+                        refreshed_tools = await ToolDiscoveryEngine.discover_tools(worker.session, server_id)
+                        await self.registry.register_tools(server_id, refreshed_tools)
+                    except Exception as exc:
+                        logger.warning(f"Failed to refresh tools for '{server_id}': {exc}")
+
+        try:
+            async with stdio_client(params) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream, message_handler=_notification_handler) as session:
+                    await asyncio.wait_for(session.initialize(), timeout=config.timeout_seconds)
+
+                    tools = await ToolDiscoveryEngine.discover_tools(session, server_id)
+
+                    worker = self._workers.get(server_id)
+                    if worker:
+                        worker.session = session
+
+                    await self.registry.update_status(server_id, ServerStatus.CONNECTED)
+                    await self.registry.register_tools(server_id, tools)
+                    ready_event.set()
+
+                    # Remain alive until explicitly asked to stop
+                    await stop_event.wait()
+
+        except Exception as e:
+            logger.error(f"Upstream server '{server_id}' crashed or encountered error: {e}", exc_info=True)
+            await self.registry.update_status(server_id, ServerStatus.FAILED, error=str(e))
+            await self.registry.clear_server_tools(server_id)
+            ready_event.set()
+        finally:
+            worker = self._workers.get(server_id)
+            if worker:
+                worker.session = None
+            current = await self.registry.get_server(server_id)
+            if not current or current.status != ServerStatus.FAILED:
+                current = await self.registry.get_server(server_id)
+        if not current or current.status != ServerStatus.FAILED:
+            await self.registry.update_status(server_id, ServerStatus.DISCONNECTED)
+            await self.registry.clear_server_tools(server_id)
+            logger.info(f"Cleaned up upstream worker for server '{server_id}'.")
 
     async def connect_all(self) -> dict[str, bool]:
         """Attempt to connect to all enabled upstream servers in parallel."""
@@ -109,27 +205,37 @@ class MCPClientManager:
     async def disconnect_server(self, server_id: str) -> None:
         """Disconnect an active upstream server and clean up its resources."""
         async with self._lock:
-            await self._disconnect_server_internal(server_id)
+            await self._disconnect_worker(server_id)
 
-    async def _disconnect_server_internal(self, server_id: str) -> None:
-        """Internal helper to clean up an upstream server context stack."""
-        self._sessions.pop(server_id, None)
-        stack = self._stacks.pop(server_id, None)
-        if stack:
+    async def _disconnect_worker(self, server_id: str) -> None:
+        """Signal stop to an upstream worker and wait for it to cleanly terminate."""
+        worker = self._workers.pop(server_id, None)
+        if not worker:
+            return
+
+        worker.stop_event.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(worker.task), timeout=5.0)
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"Upstream worker '{server_id}' did not terminate cleanly within timeout: {e}. Cancelling.")
+            worker.task.cancel()
             try:
-                await stack.aclose()
-            except Exception as e:
-                logger.warning(f"Error closing context stack for '{server_id}': {e}")
+                await asyncio.wait_for(worker.task, timeout=2.0)
+            except Exception:
+                pass
 
-        await self.registry.update_status(server_id, ServerStatus.DISCONNECTED)
+        current = await self.registry.get_server(server_id)
+        if not current or current.status != ServerStatus.FAILED:
+            await self.registry.update_status(server_id, ServerStatus.DISCONNECTED)
         await self.registry.clear_server_tools(server_id)
         logger.info(f"Disconnected server '{server_id}'.")
 
     async def disconnect_all(self) -> None:
         """Disconnect all active upstream servers."""
         async with self._lock:
-            for server_id in list(self._stacks.keys()):
-                await self._disconnect_server_internal(server_id)
+            server_ids = list(self._workers.keys())
+            for server_id in server_ids:
+                await self._disconnect_worker(server_id)
 
     async def call_tool(
         self,
@@ -139,13 +245,8 @@ class MCPClientManager:
     ) -> CallToolResult:
         """Route an execution request to the appropriate upstream server by namespaced tool name.
 
-        Args:
-            namespaced_tool_name: The namespaced name (e.g. 'filesystem__read_file').
-            arguments: Arguments dictionary for the tool invocation.
-            timeout_seconds: Optional timeout override.
-
-        Returns:
-            CallToolResult containing the execution outcome or error.
+        Handles timeouts with CancelledNotification, tracks consecutive failures,
+        and recycles repeatedly hanging upstream connections.
         """
         tool = await self.registry.get_tool(namespaced_tool_name)
         if not tool:
@@ -155,13 +256,14 @@ class MCPClientManager:
             )
 
         server_id = tool.server_id
-        session = self._sessions.get(server_id)
-        if not session:
+        worker = self._workers.get(server_id)
+        if not worker or not worker.session:
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Upstream server '{server_id}' is disconnected or unavailable.")],
                 is_error=True,
             )
 
+        session = worker.session
         server_info = await self.registry.get_server(server_id)
         timeout = timeout_seconds or (server_info.config.timeout_seconds if server_info else 30.0)
 
@@ -170,13 +272,40 @@ class MCPClientManager:
                 session.call_tool(tool.original_name, arguments or {}),
                 timeout=timeout,
             )
+            # Reset failure counter on successful call
+            worker.timeout_failures = 0
             return result
         except asyncio.TimeoutError:
+            worker.timeout_failures += 1
+            # Send CancelledNotification to upstream as required by MCP protocol
+            try:
+                await session.send_notification(
+                    CancelledNotification(
+                        params=CancelledNotificationParams(
+                            request_id=f"req_{tool.original_name}",
+                            reason=f"Call timed out after {timeout} seconds",
+                        )
+                    )
+                )
+            except Exception as notif_err:
+                logger.debug(f"Could not send CancelledNotification to '{server_id}': {notif_err}")
+
+            # Recycle repeatedly hanging servers
+            if worker.timeout_failures >= 3:
+                logger.error(
+                    f"Server '{server_id}' has timed out {worker.timeout_failures} consecutive times. Recycling connection."
+                )
+                await self.registry.update_status(server_id, ServerStatus.DEGRADED, error="Repeated timeouts")
+                asyncio.create_task(self.connect_server(server_id))
+
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Tool execution timed out after {timeout} seconds.")],
                 is_error=True,
             )
         except Exception as e:
+            logger.error(f"Upstream execution error on '{server_id}': {e}")
+            if worker.task.done():
+                await self.registry.update_status(server_id, ServerStatus.FAILED, error=str(e))
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Upstream execution error on '{server_id}': {e}")],
                 is_error=True,

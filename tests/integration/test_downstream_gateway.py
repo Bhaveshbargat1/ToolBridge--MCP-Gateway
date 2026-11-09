@@ -97,7 +97,7 @@ asyncio.run(run())
     gateway_params = StdioServerParameters(
         command=sys.executable,
         args=["-c", gateway_script],
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env={**os.environ, "PYTHONUNBUFFERED": "1", "TOOLBRIDGE_STDIO_ROLE": "operator"},
     )
 
     # Downstream MCP Client connects ONLY to ToolBridge Gateway

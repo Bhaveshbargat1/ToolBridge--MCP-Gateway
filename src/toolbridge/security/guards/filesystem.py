@@ -12,6 +12,24 @@ _WINDOWS_RESERVED_NAMES: Final[frozenset[str]] = frozenset({
 })
 
 
+def get_project_root() -> Path:
+    """Return the absolute path to the ToolBridge project root directory."""
+    curr = Path(__file__).resolve().parent
+    for p in [curr, *curr.parents]:
+        if (p / "pyproject.toml").exists():
+            return p
+    return Path.cwd()
+
+
+def resolve_sandbox_root(raw_path: str | Path | None = None) -> Path:
+    """Resolve sandbox root relative to project root unless explicitly absolute."""
+    path_str = str(raw_path) if raw_path else os.environ.get("FILESYSTEM_SANDBOX_ROOT", "./workspace_sandbox")
+    candidate = Path(path_str)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (get_project_root() / candidate).resolve()
+
+
 class PathSecurityError(PermissionError):
     """Raised when a path violates security constraints or sandbox boundaries."""
     pass
@@ -35,9 +53,17 @@ class FilesystemGuard:
                            are strictly rejected.
             max_file_size_bytes: Maximum allowed file read/write size in bytes.
         """
-        self._sandbox_root = Path(sandbox_root).resolve()
+        self._sandbox_root = resolve_sandbox_root(sandbox_root)
         self._allow_symlinks = allow_symlinks
-        self._max_file_size_bytes = max_file_size_bytes
+
+        env_max_bytes = os.environ.get("FILESYSTEM_MAX_WRITE_BYTES")
+        if env_max_bytes:
+            try:
+                self._max_file_size_bytes = int(env_max_bytes)
+            except ValueError:
+                self._max_file_size_bytes = max_file_size_bytes
+        else:
+            self._max_file_size_bytes = max_file_size_bytes
 
         # Ensure sandbox root directory exists
         self._sandbox_root.mkdir(parents=True, exist_ok=True)
@@ -86,22 +112,31 @@ class FilesystemGuard:
         if "\0" in raw_str:
             raise PathSecurityError("Null bytes are prohibited in file paths.")
 
-        # 2. Strict absolute path check
+        # 2. Reject Alternate Data Streams (':' anywhere in path)
+        if ":" in raw_str:
+            raise PathSecurityError(
+                f"Alternate data streams and drive identifiers are prohibited in paths: '{untrusted_path}'."
+            )
+
+        # 3. Strict absolute path check
         # Paths must be strictly relative to the sandbox root.
         raw_stripped = raw_str.strip()
-        if raw_stripped.startswith("/") or raw_stripped.startswith("\\") or re.match(r"^[a-zA-Z]:", raw_stripped):
+        if raw_stripped.startswith("/") or raw_stripped.startswith("\\"):
             raise PathSecurityError(
                 f"Absolute paths are prohibited: '{untrusted_path}'. Paths must be relative to the workspace."
             )
 
-        # 3. Windows reserved name check on any path component & obfuscated dot sequences
+        # 4. Windows reserved name check on any path component & obfuscated dot sequences
         normalized_str = raw_stripped.replace("\\", "/")
         parts = [p.strip() for p in normalized_str.split("/") if p.strip()]
         for part in parts:
             if re.match(r"^\.{3,}$", part):
                 raise PathSecurityError(f"Invalid path component '{part}' with multiple dots.")
-            stem = part.split(".")[0].upper()
-            if stem in _WINDOWS_RESERVED_NAMES:
+            # Check reserved Windows device names (CON, AUX, NUL, COM1-9, LPT1-9)
+            # Defends against extensions (CON.txt) and trailing dots/spaces ("aux .txt", "nul.")
+            clean_part = part.rstrip(" .")
+            base_stem = clean_part.split(".")[0].rstrip(" .").upper()
+            if base_stem in _WINDOWS_RESERVED_NAMES or clean_part.upper() in _WINDOWS_RESERVED_NAMES:
                 raise PathSecurityError(f"Access to reserved Windows device name '{part}' is prohibited.")
 
         # 4. Canonical path resolution
@@ -111,7 +146,26 @@ class FilesystemGuard:
             target_path = self._sandbox_root
         else:
             rel_path = "/".join(parts)
-            target_path = (self._sandbox_root / rel_path).resolve()
+            unresolved_candidate = self._sandbox_root / rel_path
+
+            # Symlink check on unresolved path components
+            check_node = unresolved_candidate
+            while check_node != self._sandbox_root and check_node.parent != check_node:
+                if check_node.is_symlink():
+                    if not self._allow_symlinks:
+                        raise PathSecurityError(
+                            f"Symlinks are disallowed: Component '{check_node.name}' is a symbolic link."
+                        )
+                    try:
+                        resolved_target = check_node.resolve()
+                        resolved_target.relative_to(self._sandbox_root)
+                    except ValueError:
+                        raise PathSecurityError(
+                            f"Symlink escape detected: '{check_node.name}' points outside the sandbox."
+                        )
+                check_node = check_node.parent
+
+            target_path = unresolved_candidate.resolve()
 
         # 5. Strict containment check (Canonical Path Traversal Defense)
         try:
@@ -121,10 +175,10 @@ class FilesystemGuard:
                 f"Path traversal detected: Target '{untrusted_path}' resolves outside the allowed workspace."
             )
 
-        # 5. Symlink escape check
+        # 6. Symlink escape check on resolved target
         self._verify_symlinks(target_path)
 
-        # 6. Existence verification if requested
+        # 7. Existence verification if requested
         if must_exist and not target_path.exists():
             raise FileNotFoundError(f"Path does not exist: '{untrusted_path}'")
 

@@ -13,7 +13,11 @@ _SENSITIVE_KEY_PATTERNS = re.compile(
 
 # Standard token regex patterns
 _BEARER_PATTERN = re.compile(r"Bearer\s+([a-zA-Z0-9_\-\.]{10,})", re.IGNORECASE)
-_GITHUB_TOKEN_PATTERN = re.compile(r"gh[pousr]_[a-zA-Z0-9_]{36,}")
+_GITHUB_CLASSIC_PATTERN = re.compile(r"gh[pousr]_[a-zA-Z0-9_]{16,}")
+_GITHUB_PAT_PATTERN = re.compile(r"github_pat_[a-zA-Z0-9_]{20,}")
+_AI_KEY_PATTERN = re.compile(r"sk-(?:proj-|ant-)?[a-zA-Z0-9_\-]{20,}")
+_AWS_KEY_PATTERN = re.compile(r"AKIA[0-9A-Z]{16}")
+_DSN_PASSWORD_PATTERN = re.compile(r"([a-zA-Z0-9+_-]+://[^:\s@]+:)(.+?)(@(?:[a-zA-Z0-9._-]+)(?::\d+)?(?:/|$))")
 
 
 class SecretSanitizer:
@@ -34,7 +38,11 @@ class SecretSanitizer:
             return [cls.sanitize(item) for item in data]
         elif isinstance(data, str):
             masked = _BEARER_PATTERN.sub("Bearer [REDACTED]", data)
-            masked = _GITHUB_TOKEN_PATTERN.sub("ghp_[REDACTED]", masked)
+            masked = _GITHUB_CLASSIC_PATTERN.sub("ghp_[REDACTED]", masked)
+            masked = _GITHUB_PAT_PATTERN.sub("github_pat_[REDACTED]", masked)
+            masked = _AI_KEY_PATTERN.sub("sk-[REDACTED]", masked)
+            masked = _AWS_KEY_PATTERN.sub("AKIA[REDACTED]", masked)
+            masked = _DSN_PASSWORD_PATTERN.sub(r"\1[REDACTED]\3", masked)
             return masked
         return data
 

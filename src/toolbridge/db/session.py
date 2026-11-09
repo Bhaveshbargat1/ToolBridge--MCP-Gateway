@@ -28,6 +28,16 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
             future=True,
             connect_args={"check_same_thread": False} if "sqlite" in url else {},
         )
+
+        if "sqlite" in url:
+            from sqlalchemy import event
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragmas(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA busy_timeout=5000;")
+                cursor.close()
     return _engine
 
 

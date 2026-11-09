@@ -4,7 +4,7 @@
 [![MCP SDK v2](https://img.shields.io/badge/mcp--sdk-v2.3.0-green.svg)](https://modelcontextprotocol.io/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162.2-009688.svg)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.67.0-FF4B4B.svg)](https://streamlit.io/)
-[![Tests](https://img.shields.io/badge/tests-104%20passed%2C%201%20skipped-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-180%20passed-brightgreen.svg)]()
 [![Security](https://img.shields.io/badge/Security-7--Layer%20Sandbox-red.svg)]()
 
 > **ToolBridge** is a centralized, secure **Enterprise MCP Gateway** that connects multiple upstream Model Context Protocol (MCP) servers and multiplexes their tools to downstream AI applications (Claude Desktop, Cursor, IDEs, autonomous LLM agents) through a single, unified, namespaced MCP interface.
@@ -161,14 +161,20 @@ Automatically masks passwords, GitHub Personal Access Tokens (`ghp_`), Bearer to
 3. **Install dependencies**:
    ```bash
    pip install --upgrade pip
-   pip install -e ".[dev]"
+   pip install -e ".[all,dev]"
    ```
 
-4. **Configure environment variables**:
+4. **Configure environment variables & API keys**:
    ```bash
    cp .env.example .env
    ```
-   *(Optional: Set `GITHUB_PERSONAL_ACCESS_TOKEN` in `.env` if you wish to query private GitHub repositories).*
+   Generate strong, cryptographically secure keys (minimum 32 characters) for each role:
+   ```bash
+   python -c "import secrets; print('TOOLBRIDGE_ADMIN_KEY=' + secrets.token_urlsafe(32))"
+   python -c "import secrets; print('TOOLBRIDGE_OPERATOR_KEY=' + secrets.token_urlsafe(32))"
+   python -c "import secrets; print('TOOLBRIDGE_READONLY_KEY=' + secrets.token_urlsafe(32))"
+   ```
+   Add these generated keys to your `.env` file. The API will refuse to boot if any key is missing, shorter than 32 characters, or set to a known placeholder.
 
 ---
 
@@ -178,29 +184,33 @@ Automatically masks passwords, GitHub Personal Access Tokens (`ghp_`), Bearer to
 To run ToolBridge as a stdio server for Claude Desktop, Cursor, or AI agent processes:
 ```bash
 python -m toolbridge.server.gateway
+# Or via launcher:
+python run_demo.py gateway
 ```
-*Note: ToolBridge will start, connect to all configured upstream servers, discover tools, and wait for JSON-RPC 2.0 messages over standard input.*
+*Note: All gateway logging and banners are piped strictly to `stderr` so the standard input/output stream remains 100% pure JSON-RPC 2.0 without protocol corruption.*
 
 ### 2. FastAPI Management & Audit API
-Run the REST API management service with auto-reload:
+Run the REST API management service:
 ```bash
 uvicorn toolbridge.api.app:app --host 127.0.0.1 --port 8000
+# Or via launcher:
+python run_demo.py api
 ```
 Interactive Swagger API documentation is available at:
 👉 **`http://127.0.0.1:8000/docs`**
 
-**Default API Authentication Keys:**
-- Admin: `tb-admin-key-999` (Role: `admin`)
-- Operator: `tb-operator-key-555` (Role: `operator`)
-- Read-Only: `tb-readonly-key-111` (Role: `readonly`)
+**API Authentication Roles:**
+- Admin (`TOOLBRIDGE_ADMIN_KEY`): Server registration, dynamic configurations, audit log access, all tool invocations.
+- Operator (`TOOLBRIDGE_OPERATOR_KEY`): Safe operations + sensitive tool execution (`filesystem__write_file`).
+- Read-Only (`TOOLBRIDGE_READONLY_KEY`): Strictly read-only operations (`filesystem__read_file`, `postgres__execute_query`).
 
 ### 3. Streamlit Observability Dashboard
 Launch the control plane and interactive tool execution UI:
 ```bash
-streamlit run src/toolbridge/dashboard/app.py
+python run_demo.py dashboard
 ```
 Dashboard opens in your browser at:
-👉 **`http://localhost:8501`**
+👉 **`http://127.0.0.1:8501`** (Protected by Admin API Key Gate)
 
 ---
 
@@ -215,21 +225,24 @@ To expose all ToolBridge upstream tools (Filesystem, PostgreSQL, GitHub) to **Cl
 {
   "mcpServers": {
     "toolbridge": {
-      "command": "d:\\Personal Projects\\Toolbridge - mcp gateway\\.venv\\Scripts\\python.exe",
+      "command": "<absolute-path-to-toolbridge-repo>/.venv/Scripts/python.exe",
       "args": [
         "-m",
         "toolbridge.server.gateway"
       ],
       "env": {
-        "FILESYSTEM_SANDBOX_ROOT": "./workspace_sandbox",
+        "FILESYSTEM_SANDBOX_ROOT": "<absolute-path-to-toolbridge-repo>/workspace_sandbox",
+        "TOOLBRIDGE_STDIO_ROLE": "readonly",
         "GITHUB_PERSONAL_ACCESS_TOKEN": ""
       }
     }
   }
 }
 ```
+> [!NOTE]
+> Replace `<absolute-path-to-toolbridge-repo>` with the absolute path to your cloned ToolBridge repository. If `FILESYSTEM_SANDBOX_ROOT` is relative, ToolBridge automatically anchors it to the project root directory.
 
-Restart Claude Desktop, and click the hammer icon 🔨 to verify that all 11 namespaced tools appear automatically!
+Restart Claude Desktop, and click the hammer icon 🔨 to verify that all namespaced tools appear automatically!
 
 ---
 
@@ -252,7 +265,7 @@ curl -X GET "http://127.0.0.1:8000/health"
 ### 2. Discover Namespaced Tools
 ```bash
 curl -X GET "http://127.0.0.1:8000/api/v1/tools" \
-     -H "X-API-Key: tb-readonly-key-111"
+     -H "X-API-Key: YOUR_READONLY_KEY_HERE"
 ```
 **Response (Sample):**
 ```json
@@ -284,7 +297,7 @@ curl -X GET "http://127.0.0.1:8000/api/v1/tools" \
 ### 3. Invoke Tool: Read-Only Query (Success)
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
-     -H "X-API-Key: tb-readonly-key-111" \
+     -H "X-API-Key: YOUR_READONLY_KEY_HERE" \
      -H "Content-Type: application/json" \
      -d '{
        "tool_name": "filesystem__list_directory",
@@ -295,7 +308,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
 ### 4. Security Test: Sensitive Tool Attempt by Read-Only User (Blocked by RBAC)
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
-     -H "X-API-Key: tb-readonly-key-111" \
+     -H "X-API-Key: YOUR_READONLY_KEY_HERE" \
      -H "Content-Type: application/json" \
      -d '{
        "tool_name": "filesystem__write_file",
@@ -313,7 +326,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
 ### 5. Security Test: SQL Injection Blocked by AST Guard
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
-     -H "X-API-Key: tb-admin-key-999" \
+     -H "X-API-Key: YOUR_ADMIN_KEY_HERE" \
      -H "Content-Type: application/json" \
      -d '{
        "tool_name": "postgres__execute_query",
@@ -323,7 +336,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/tools/invoke" \
 **Response:**
 ```json
 {
-  "detail": "SQLSecurityError: Multiple SQL statements detected. Only single statements permitted."
+  "detail": "SQLSecurityError: Multi-statement execution is strictly prohibited. Exactly one query is permitted."
 }
 ```
 
@@ -340,33 +353,20 @@ Run the full test suite:
 
 **Test Summary:**
 ```text
-============================= test session starts =============================
-platform win32 -- Python 3.12.10, pytest-9.2.0
-plugins: anyio-4.16.0, asyncio-1.4.1.post1
-collected 105 items
-
-tests\integration\test_api.py .........................                  [ 23%]
-tests\integration\test_client_manager.py ...                             [ 26%]
-tests\integration\test_downstream_gateway.py .                           [ 27%]
-tests\integration\test_filesystem_server.py ...............              [ 41%]
-tests\integration\test_postgres_server.py ..............                 [ 55%]
-tests\security\test_filesystem_guard.py .................s.              [ 73%]
-tests\security\test_sql_guard.py .............................           [100%]
-
-======================= 104 passed, 1 skipped in 37.37s =======================
+======================= 180 passed in 66.34s =======================
 ```
-*(Note: 1 test in `test_filesystem_guard.py` is skipped on Windows when unprivileged symlink creation privilege `SeCreateSymbolicLinkPrivilege` is not enabled, matching standard OS security behavior).*
+*(All 180 tests pass with 0 skipped; symlink validation tests include mock fallbacks for non-elevated developer mode environments).*
 
 ---
 
 ## ⚠️ Honest Production Readiness & Limitations
 
-To maintain professional engineering integrity, the following limitations should be evaluated before production deployment:
+To maintain professional engineering integrity, the following architectural boundaries should be noted:
 
-1. **In-Memory Rate Limiting**: The current `SlidingWindowRateLimiter` operates in-memory on a single Python process. If ToolBridge is scaled horizontally behind a round-robin load balancer, rate limits are not shared across nodes. Production requires a Redis-backed distributed token bucket.
-2. **PostgreSQL Setup Script**: The provided `scripts/setup_postgres_db.sql` creates a dedicated `mcp_readonly` user. In enterprise environments, this must be provisioned via Terraform / CloudFormation with secrets retrieved from AWS Secrets Manager or HashiCorp Vault.
-3. **Transport Protocol**: Downstream clients currently connect via `stdio` or HTTP management endpoints. For high-throughput cloud microservices, an SSE (Server-Sent Events) or WebSocket transport with mTLS termination is recommended.
-4. **Persistent Server Registry**: Server configurations are currently loaded during gateway boot. Multi-tenant enterprise environments should store server configurations in a replicated database with dynamic add/remove hooks.
+1. **Single-Node Deployment & In-Memory Rate Limiting**: The current `SlidingWindowRateLimiter` operates in-memory on a single Python process with automatic key eviction to bound memory. If ToolBridge is scaled horizontally behind a round-robin load balancer, rate limits are not shared across nodes. Multi-node clusters require a distributed Redis token-bucket implementation.
+2. **Dashboard Direct Database Access**: The Streamlit dashboard connects directly to the local SQLite database (`toolbridge.db`) for real-time audit visualization, bypassing REST API RBAC middleware. An Admin Key authentication gate is enforced in the dashboard UI to restrict access to sensitive execution and audit tabs.
+3. **PostgreSQL Setup Script**: The provided `scripts/setup_postgres_db.sql` creates a locked-down `mcp_readonly` role with `SET default_transaction_read_only = on` and explicit SELECT grants. In enterprise production, credentials should be dynamically rotated via AWS Secrets Manager or HashiCorp Vault.
+4. **Transport Protocols**: Downstream AI clients currently connect via `stdio` (Claude Desktop / Cursor) or the HTTP management API. High-concurrency agent workflows would benefit from an SSE (Server-Sent Events) transport with mTLS termination.
 
 ---
 

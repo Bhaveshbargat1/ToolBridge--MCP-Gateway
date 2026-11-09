@@ -183,3 +183,55 @@ async def test_failed_connection_handling(client_env):
     assert info.status == ServerStatus.FAILED
     assert info.last_error is not None
     assert info.tool_count == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_client_manager_edge_cases(client_env):
+    """Verify ClientManager branches for unconfigured, disabled, and unsupported transports."""
+    manager, registry, _ = client_env
+
+    # 1. Nonexistent server connect
+    assert await manager.connect_server("nonexistent") is False
+
+    # 2. Disabled server connect
+    disabled_config = UpstreamServerConfig(
+        id="disabled_server",
+        name="Disabled Server",
+        enabled=False,
+    )
+    await registry.register_server(disabled_config)
+    assert await manager.connect_server("disabled_server") is False
+
+    # 3. Unsupported transport (e.g. SSE)
+    sse_config = UpstreamServerConfig(
+        id="sse_server",
+        name="SSE Server",
+        transport=TransportType.SSE,
+        url="http://127.0.0.1:9000/sse",
+    )
+    await registry.register_server(sse_config)
+    assert await manager.connect_server("sse_server") is False
+    sse_info = await registry.get_server("sse_server")
+    assert sse_info.status == ServerStatus.FAILED
+
+    # 4. Stdio with missing command
+    no_cmd_config = UpstreamServerConfig(
+        id="no_cmd_server",
+        name="No Command Server",
+        transport=TransportType.STDIO,
+        command="",
+    )
+    await registry.register_server(no_cmd_config)
+    assert await manager.connect_server("no_cmd_server") is False
+    no_cmd_info = await registry.get_server("no_cmd_server")
+    assert no_cmd_info.status == ServerStatus.FAILED
+
+    # 5. Disconnect nonexistent server should complete gracefully without error
+    await manager.disconnect_server("nonexistent")
+
+    # 6. Call unknown tool
+    unknown_res = await manager.call_tool("unknown__tool", {})
+    assert unknown_res.is_error is True
+    assert "Tool not found" in unknown_res.content[0].text
+
