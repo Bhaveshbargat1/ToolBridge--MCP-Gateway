@@ -44,14 +44,12 @@ class ServerRegistry:
             return True
 
     async def get_server(self, server_id: str) -> UpstreamServerInfo | None:
-        """Retrieve server runtime info by ID."""
-        async with self._lock:
-            return self._servers.get(server_id)
+        """Retrieve server runtime info by ID with lock-free dictionary read."""
+        return self._servers.get(server_id)
 
     async def get_all_servers(self) -> list[UpstreamServerInfo]:
-        """List all registered upstream servers."""
-        async with self._lock:
-            return list(self._servers.values())
+        """List all registered upstream servers with lock-free snapshot."""
+        return list(self._servers.values())
 
     async def update_status(
         self,
@@ -100,11 +98,9 @@ class ServerRegistry:
                 self._servers[server_id].tool_count = 0
 
     async def get_tool(self, namespaced_name: str) -> NamespacedTool | None:
-        """Lookup a tool by its namespaced name."""
-        async with self._lock:
-            return self._tools.get(namespaced_name)
+        """Lookup a tool by its namespaced name with lock-free dictionary read."""
+        return self._tools.get(namespaced_name)
 
     async def get_all_tools(self) -> list[NamespacedTool]:
-        """Return all active tools across all connected servers."""
-        async with self._lock:
-            return list(self._tools.values())
+        """Return all active tools across all connected servers with lock-free snapshot."""
+        return list(self._tools.values())

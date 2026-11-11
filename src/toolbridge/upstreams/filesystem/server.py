@@ -235,7 +235,10 @@ class FilesystemMCPServer:
     # --- Tool Implementations ---
 
     async def tool_list_directory(self, args: Mapping[str, Any]) -> CallToolResult:
-        """List contents of a directory safely within the sandbox."""
+        """List contents of a directory safely within the sandbox (non-blocking threadpool)."""
+        return await asyncio.to_thread(self._list_directory_sync, args)
+
+    def _list_directory_sync(self, args: Mapping[str, Any]) -> CallToolResult:
         untrusted_path = args.get("path", "")
         recursive = bool(args.get("recursive", False))
         max_depth = min(max(int(args.get("max_depth", 3)), 1), 10)
@@ -272,7 +275,10 @@ class FilesystemMCPServer:
         return self._success_result(json.dumps(payload, indent=2))
 
     async def tool_read_file(self, args: Mapping[str, Any]) -> CallToolResult:
-        """Read file contents safely, enforcing max size limits."""
+        """Read file contents safely, enforcing max size limits (non-blocking threadpool)."""
+        return await asyncio.to_thread(self._read_file_sync, args)
+
+    def _read_file_sync(self, args: Mapping[str, Any]) -> CallToolResult:
         untrusted_path = args.get("path")
         if not untrusted_path:
             return self._error_result("Missing required argument: 'path'")
@@ -321,7 +327,10 @@ class FilesystemMCPServer:
         return self._success_result(content)
 
     async def tool_write_file(self, args: Mapping[str, Any]) -> CallToolResult:
-        """Atomically write text into a file within the sandbox."""
+        """Atomically write text into a file within the sandbox (non-blocking threadpool)."""
+        return await asyncio.to_thread(self._write_file_sync, args)
+
+    def _write_file_sync(self, args: Mapping[str, Any]) -> CallToolResult:
         untrusted_path = args.get("path")
         if not untrusted_path:
             return self._error_result("Missing required argument: 'path'")
@@ -394,7 +403,10 @@ class FilesystemMCPServer:
         return self._success_result(json.dumps(res_info, indent=2))
 
     async def tool_search_files(self, args: Mapping[str, Any]) -> CallToolResult:
-        """Search for files by name/glob or content within the sandbox."""
+        """Search for files by name/glob or content within the sandbox (non-blocking threadpool)."""
+        return await asyncio.to_thread(self._search_files_sync, args)
+
+    def _search_files_sync(self, args: Mapping[str, Any]) -> CallToolResult:
         query = args.get("query")
         if not query:
             return self._error_result("Missing required argument: 'query'")
@@ -483,7 +495,10 @@ class FilesystemMCPServer:
         return self._success_result(json.dumps(payload, indent=2))
 
     async def tool_get_file_info(self, args: Mapping[str, Any]) -> CallToolResult:
-        """Inspect file or directory metadata."""
+        """Inspect file or directory metadata (non-blocking threadpool)."""
+        return await asyncio.to_thread(self._get_file_info_sync, args)
+
+    def _get_file_info_sync(self, args: Mapping[str, Any]) -> CallToolResult:
         untrusted_path = args.get("path")
         if not untrusted_path:
             return self._error_result("Missing required argument: 'path'")

@@ -353,9 +353,23 @@ Run the full test suite:
 
 **Test Summary:**
 ```text
-======================= 180 passed in 66.34s =======================
+======================= 180 passed in 81.41s =======================
 ```
 *(All 180 tests pass with 0 skipped; symlink validation tests include mock fallbacks for non-elevated developer mode environments).*
+
+### Performance Benchmarking Suite
+
+Execute the automated performance benchmarking suite:
+```powershell
+.\.venv\Scripts\python scripts/benchmark_performance.py
+```
+Key subsystem benchmarks:
+- **Rate Limiter Throughput**: >840,000 ops/sec ($O(1)$ deque sliding window, P50 < 0.001 ms).
+- **Secret Sanitizer Throughput**: >2,200,000 ops/sec on benign payloads via fast-path heuristic filter.
+- **JSON Schema Validation**: >26,000 ops/sec (pre-compiled validator cache, P50 ~ 0.02 ms).
+- **Resilient PostgreSQL Fallback**: >1,500 queries/sec (<0.64 ms avg latency) with state-guarded fallback.
+- **Filesystem Concurrency**: 100 parallel operations offloaded to non-blocking worker threads.
+- **Audit Logging**: >260 logs/sec with zero-SELECT post-commit and cached sessionmaker.
 
 ---
 

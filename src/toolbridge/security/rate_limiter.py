@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 class RateLimitExceededError(Exception):
@@ -14,12 +14,12 @@ class RateLimitExceededError(Exception):
 
 
 class SlidingWindowRateLimiter:
-    """In-memory sliding window rate limiter per caller key."""
+    """In-memory sliding window rate limiter per caller key using high-performance deques."""
 
     def __init__(self, max_requests_per_minute: int = 60) -> None:
         self.max_requests = max_requests_per_minute
         self.window_seconds = 60.0
-        self._history: dict[str, list[float]] = defaultdict(list)
+        self._history: dict[str, deque[float]] = defaultdict(deque)
         self._lock = asyncio.Lock()
         self._last_eviction = time.time()
         self._eviction_interval = 30.0  # Run full eviction every 30s or when size threshold reached
@@ -35,7 +35,7 @@ class SlidingWindowRateLimiter:
             del self._history[k]
 
     async def check_rate_limit(self, key: str) -> None:
-        """Check if caller key is within rate limits. Raises RateLimitExceededError if violated."""
+        """Check if caller key is within rate limits with O(1) amortized queue operations."""
         now = time.time()
         window_start = now - self.window_seconds
 
@@ -45,9 +45,10 @@ class SlidingWindowRateLimiter:
                 self._evict_expired(now)
                 self._last_eviction = now
 
-            # Purge timestamps outside sliding window
-            timestamps = [t for t in self._history[key] if t > window_start]
-            self._history[key] = timestamps
+            timestamps = self._history[key]
+            # Fast O(1) eviction of expired timestamps from front of deque
+            while timestamps and timestamps[0] <= window_start:
+                timestamps.popleft()
 
             if len(timestamps) >= self.max_requests:
                 oldest = timestamps[0]
@@ -58,4 +59,4 @@ class SlidingWindowRateLimiter:
                 )
 
             # Record this request
-            self._history[key].append(now)
+            timestamps.append(now)

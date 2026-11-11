@@ -90,7 +90,7 @@ async def invoke_tool(
 
     # 4. Tool Execution & Timing
     start_time = time.perf_counter()
-    result = await router_proxy.dispatch(tool_name, args)
+    result = await router_proxy.dispatch(tool_name, args, tool=tool)
     duration_ms = (time.perf_counter() - start_time) * 1000
 
     # 5. Determine Result Status & Summary

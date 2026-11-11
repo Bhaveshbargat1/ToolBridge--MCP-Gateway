@@ -363,6 +363,7 @@ class ResilientPostgresBackend(DatabaseBackend):
         self.sqlite_backend = sqlite_backend or SQLiteTestBackend(db_path=fallback_db_path)
         self._active_backend: DatabaseBackend = self.postgres_backend
         self._is_fallback: bool = False
+        self._is_connected: bool = False
 
     @property
     def is_fallback(self) -> bool:
@@ -371,11 +372,15 @@ class ResilientPostgresBackend(DatabaseBackend):
 
     async def connect(self) -> None:
         """Attempt PostgreSQL connection with graceful automatic fallback to SQLite."""
+        if self._is_connected:
+            return
+
         force_sqlite = os.environ.get("POSTGRES_BACKEND", "").lower() == "sqlite"
         if force_sqlite:
             self._active_backend = self.sqlite_backend
             self._is_fallback = True
             await self.sqlite_backend.connect()
+            self._is_connected = True
             return
 
         # Fast TCP pre-flight check to avoid long timeouts on closed ports
@@ -396,6 +401,7 @@ class ResilientPostgresBackend(DatabaseBackend):
                 await self.postgres_backend.connect()
                 self._active_backend = self.postgres_backend
                 self._is_fallback = False
+                self._is_connected = True
                 return
             except Exception as e:
                 logger.warning(f"PostgreSQL connection failed despite open port: {e}")
@@ -408,9 +414,11 @@ class ResilientPostgresBackend(DatabaseBackend):
         self._active_backend = self.sqlite_backend
         self._is_fallback = True
         await self.sqlite_backend.connect()
+        self._is_connected = True
 
     async def disconnect(self) -> None:
         await self._active_backend.disconnect()
+        self._is_connected = False
 
     async def list_tables(self, schema: str = "public") -> list[dict[str, Any]]:
         return await self._active_backend.list_tables(schema=schema)

@@ -37,6 +37,11 @@ class SecretSanitizer:
         elif isinstance(data, list):
             return [cls.sanitize(item) for item in data]
         elif isinstance(data, str):
+            # Fast-path: bypass 6 sequential regex scans on benign strings
+            data_lower = data.lower()
+            if not ("bearer" in data_lower or "gh" in data or "sk-" in data or "akia" in data_lower or "://" in data):
+                return data
+
             masked = _BEARER_PATTERN.sub("Bearer [REDACTED]", data)
             masked = _GITHUB_CLASSIC_PATTERN.sub("ghp_[REDACTED]", masked)
             masked = _GITHUB_PAT_PATTERN.sub("github_pat_[REDACTED]", masked)

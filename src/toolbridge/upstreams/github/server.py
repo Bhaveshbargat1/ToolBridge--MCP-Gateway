@@ -112,12 +112,30 @@ class GitHubMCPServer:
         self.token = token if token is not None else os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "").strip()
         self.base_url = base_url.rstrip("/")
         self._custom_client = client
+        self._internal_client: httpx.AsyncClient | None = None
         self.server = Server(
             name="toolbridge-github",
             version="0.1.0",
             on_list_tools=self._handle_list_tools,
             on_call_tool=self._handle_call_tool,
         )
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return active custom client or get/create pooled internal client."""
+        if self._custom_client is not None:
+            return self._custom_client
+        if self._internal_client is None or self._internal_client.is_closed:
+            self._internal_client = httpx.AsyncClient(
+                timeout=10.0,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=30.0),
+            )
+        return self._internal_client
+
+    async def aclose(self) -> None:
+        """Close internal pooled client session."""
+        if self._internal_client is not None and not self._internal_client.is_closed:
+            await self._internal_client.aclose()
+            self._internal_client = None
 
     def _get_headers(self) -> dict[str, str]:
         """Build request headers with secure authentication."""
@@ -268,17 +286,12 @@ class GitHubMCPServer:
         url: str,
         params: dict[str, Any] | None = None,
     ) -> Any:
-        """Send HTTP request to GitHub API using shared or transient client."""
+        """Send HTTP request to GitHub API using shared pooled client."""
         headers = self._get_headers()
-        if self._custom_client is not None:
-            response = await self._custom_client.request(method, url, headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.request(method, url, headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
+        client = self._get_client()
+        response = await client.request(method, url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
 
     def _success_result(self, text: str) -> CallToolResult:
         return CallToolResult(content=[TextContent(type="text", text=text)], is_error=False)
@@ -296,9 +309,12 @@ def create_github_server(token: str | None = None) -> Server:
 async def main() -> None:
     """Run the GitHub MCP server over stdio."""
     app = GitHubMCPServer()
-    async with stdio_server() as (read_stream, write_stream):
-        init_options = app.server.create_initialization_options()
-        await app.server.run(read_stream, write_stream, init_options)
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            init_options = app.server.create_initialization_options()
+            await app.server.run(read_stream, write_stream, init_options)
+    finally:
+        await app.aclose()
 
 
 if __name__ == "__main__":

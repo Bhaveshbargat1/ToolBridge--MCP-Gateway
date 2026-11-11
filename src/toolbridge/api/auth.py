@@ -66,17 +66,32 @@ def validate_api_key(key_name: str, key_value: str | None) -> str:
     return val
 
 
-def get_configured_api_keys() -> dict[str, AuthenticatedUser]:
-    """Retrieve validated API key mapping from environment. Fails if any key is invalid."""
-    admin_key = validate_api_key("TOOLBRIDGE_ADMIN_KEY", os.environ.get("TOOLBRIDGE_ADMIN_KEY"))
-    operator_key = validate_api_key("TOOLBRIDGE_OPERATOR_KEY", os.environ.get("TOOLBRIDGE_OPERATOR_KEY"))
-    readonly_key = validate_api_key("TOOLBRIDGE_READONLY_KEY", os.environ.get("TOOLBRIDGE_READONLY_KEY"))
+_CACHE_ENV_TUPLE: tuple[str | None, str | None, str | None] | None = None
+_CONFIGURED_KEYS_CACHE: dict[str, AuthenticatedUser] | None = None
 
-    return {
+
+def get_configured_api_keys() -> dict[str, AuthenticatedUser]:
+    """Retrieve validated API key mapping from environment with fast cache check."""
+    global _CACHE_ENV_TUPLE, _CONFIGURED_KEYS_CACHE
+    current_env = (
+        os.environ.get("TOOLBRIDGE_ADMIN_KEY"),
+        os.environ.get("TOOLBRIDGE_OPERATOR_KEY"),
+        os.environ.get("TOOLBRIDGE_READONLY_KEY"),
+    )
+    if _CONFIGURED_KEYS_CACHE is not None and _CACHE_ENV_TUPLE == current_env:
+        return _CONFIGURED_KEYS_CACHE
+
+    admin_key = validate_api_key("TOOLBRIDGE_ADMIN_KEY", current_env[0])
+    operator_key = validate_api_key("TOOLBRIDGE_OPERATOR_KEY", current_env[1])
+    readonly_key = validate_api_key("TOOLBRIDGE_READONLY_KEY", current_env[2])
+
+    _CONFIGURED_KEYS_CACHE = {
         admin_key: AuthenticatedUser(caller_id="admin_user", role=UserRole.ADMIN),
         operator_key: AuthenticatedUser(caller_id="operator_user", role=UserRole.OPERATOR),
         readonly_key: AuthenticatedUser(caller_id="readonly_user", role=UserRole.READONLY),
     }
+    _CACHE_ENV_TUPLE = current_env
+    return _CONFIGURED_KEYS_CACHE
 
 
 def _get_configured_api_keys() -> dict[str, AuthenticatedUser]:

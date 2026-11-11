@@ -29,6 +29,7 @@ class _UpstreamWorkerState:
     """Tracks state and dedicated lifecycle task for a connected upstream server."""
     task: asyncio.Task[None]
     stop_event: asyncio.Event
+    config: UpstreamServerConfig | None = None
     session: ClientSession | None = None
     timeout_failures: int = 0
 
@@ -59,7 +60,7 @@ class MCPClientManager:
     async def connect_server(self, server_id: str) -> bool:
         """Establish an MCP connection with an upstream server and discover its tools.
 
-        Spawns a dedicated owner task and awaits the initialization handshake.
+        Spawns a dedicated owner task and awaits the initialization handshake in parallel.
         """
         async with self._lock:
             server_info = await self.registry.get_server(server_id)
@@ -93,25 +94,29 @@ class MCPClientManager:
             self._workers[server_id] = _UpstreamWorkerState(
                 task=task,
                 stop_event=stop_event,
+                config=config,
                 session=None,
             )
 
-            try:
-                timeout = config.timeout_seconds + 5.0
-                await asyncio.wait_for(ready_event.wait(), timeout=timeout)
-                worker = self._workers.get(server_id)
-                if worker and worker.session and not task.done():
-                    logger.info(f"Successfully connected to upstream server '{server_id}'.")
-                    return True
-                else:
-                    logger.error(f"Worker for '{server_id}' terminated before readiness.")
+        # Await readiness outside self._lock so multiple servers connect in parallel
+        timeout = config.timeout_seconds + 5.0
+        try:
+            await asyncio.wait_for(ready_event.wait(), timeout=timeout)
+            worker = self._workers.get(server_id)
+            if worker and worker.session and not task.done():
+                logger.info(f"Successfully connected to upstream server '{server_id}'.")
+                return True
+            else:
+                logger.error(f"Worker for '{server_id}' terminated before readiness.")
+                async with self._lock:
                     await self._disconnect_worker(server_id)
-                    return False
-            except asyncio.TimeoutError:
-                logger.error(f"Connection timeout waiting for server '{server_id}' to start.")
-                await self._disconnect_worker(server_id)
-                await self.registry.update_status(server_id, ServerStatus.FAILED, error="Connection timeout")
                 return False
+        except asyncio.TimeoutError:
+            logger.error(f"Connection timeout waiting for server '{server_id}' to start.")
+            async with self._lock:
+                await self._disconnect_worker(server_id)
+            await self.registry.update_status(server_id, ServerStatus.FAILED, error="Connection timeout")
+            return False
 
     async def _run_upstream_worker(
         self,
@@ -231,31 +236,32 @@ class MCPClientManager:
         logger.info(f"Disconnected server '{server_id}'.")
 
     async def disconnect_all(self) -> None:
-        """Disconnect all active upstream servers."""
+        """Disconnect all active upstream servers concurrently."""
         async with self._lock:
             server_ids = list(self._workers.keys())
-            for server_id in server_ids:
-                await self._disconnect_worker(server_id)
+        if server_ids:
+            await asyncio.gather(*[self.disconnect_server(s_id) for s_id in server_ids], return_exceptions=True)
 
     async def call_tool(
         self,
         namespaced_tool_name: str,
         arguments: dict[str, Any] | None = None,
         timeout_seconds: float | None = None,
+        tool: Any | None = None,
     ) -> CallToolResult:
         """Route an execution request to the appropriate upstream server by namespaced tool name.
 
         Handles timeouts with CancelledNotification, tracks consecutive failures,
         and recycles repeatedly hanging upstream connections.
         """
-        tool = await self.registry.get_tool(namespaced_tool_name)
-        if not tool:
+        target_tool = tool or await self.registry.get_tool(namespaced_tool_name)
+        if not target_tool:
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Tool not found: '{namespaced_tool_name}'")],
                 is_error=True,
             )
 
-        server_id = tool.server_id
+        server_id = target_tool.server_id
         worker = self._workers.get(server_id)
         if not worker or not worker.session:
             return CallToolResult(
@@ -264,12 +270,17 @@ class MCPClientManager:
             )
 
         session = worker.session
-        server_info = await self.registry.get_server(server_id)
-        timeout = timeout_seconds or (server_info.config.timeout_seconds if server_info else 30.0)
+        timeout = timeout_seconds
+        if timeout is None and hasattr(worker, "config") and worker.config is not None:
+            cfg_timeout = getattr(worker.config, "timeout_seconds", None)
+            if isinstance(cfg_timeout, (int, float)):
+                timeout = float(cfg_timeout)
+        if timeout is None:
+            timeout = 30.0
 
         try:
             result = await asyncio.wait_for(
-                session.call_tool(tool.original_name, arguments or {}),
+                session.call_tool(target_tool.original_name, arguments or {}),
                 timeout=timeout,
             )
             # Reset failure counter on successful call
@@ -282,7 +293,7 @@ class MCPClientManager:
                 await session.send_notification(
                     CancelledNotification(
                         params=CancelledNotificationParams(
-                            request_id=f"req_{tool.original_name}",
+                            request_id=f"req_{target_tool.original_name}",
                             reason=f"Call timed out after {timeout} seconds",
                         )
                     )

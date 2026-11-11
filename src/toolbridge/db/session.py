@@ -10,6 +10,20 @@ from sqlmodel import SQLModel
 
 _DEFAULT_DB_URL = "sqlite+aiosqlite:///./data/toolbridge.db"
 _engine: AsyncEngine | None = None
+_session_factories: dict[AsyncEngine, sessionmaker] = {}
+
+
+def _get_session_factory(eng: AsyncEngine) -> sessionmaker:
+    """Retrieve or create a cached sessionmaker for the given engine."""
+    factory = _session_factories.get(eng)
+    if factory is None:
+        factory = sessionmaker(
+            eng,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        _session_factories[eng] = factory
+    return factory
 
 
 def get_engine(db_url: str | None = None) -> AsyncEngine:
@@ -52,12 +66,8 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
 async def get_session(engine: AsyncEngine | None = None) -> AsyncGenerator[AsyncSession, None]:
     """Provide an asynchronous database session context."""
     eng = engine or get_engine()
-    async_session_factory = sessionmaker(
-        eng,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    async with async_session_factory() as session:
+    factory = _get_session_factory(eng)
+    async with factory() as session:
         try:
             yield session
             await session.commit()

@@ -122,14 +122,24 @@ def create_app(
 
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-        @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-        async def serve_index():
-            index_path = os.path.join(static_dir, "index.html")
+        index_path = os.path.join(static_dir, "index.html")
+        cached_index_html: str | None = None
+        if os.path.exists(index_path):
             try:
                 with open(index_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                    cached_index_html = f.read()
             except Exception:
-                return HTMLResponse(content="<h1>ToolBridge Web Control Center</h1>", status_code=200)
+                cached_index_html = None
+
+        @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+        async def serve_index():
+            content = cached_index_html
+            if content is None:
+                try:
+                    with open(index_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except Exception:
+                    return HTMLResponse(content="<h1>ToolBridge Web Control Center</h1>", status_code=200)
 
             # Inject active keys for local web console session
             admin_k = os.environ.get("TOOLBRIDGE_ADMIN_KEY", "")

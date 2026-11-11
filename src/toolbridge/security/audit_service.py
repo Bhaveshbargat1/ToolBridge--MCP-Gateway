@@ -47,7 +47,6 @@ class AuditService:
         )
         session.add(record)
         await session.commit()
-        await session.refresh(record)
         logger.info(f"Audit log recorded #{record.id}: [{status}] '{tool_name}' by '{caller_id}' ({duration_ms:.1f}ms)")
         return record
 
