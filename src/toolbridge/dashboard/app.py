@@ -179,6 +179,68 @@ def invoke_api_tool(api_url: str, api_key: str, tool_name: str, arguments: dict[
         return {"status_code": 500, "success": False, "data": {"detail": str(e)}}
 
 
+def fetch_assistant_status(api_url: str, api_key: str) -> dict[str, Any] | None:
+    """Fetch assistant configuration and provider status from FastAPI."""
+    try:
+        headers = {"X-API-Key": api_key}
+        resp = requests.get(f"{api_url}/api/v1/assistant/status", headers=headers, timeout=2.0)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+def send_assistant_chat(
+    api_url: str,
+    api_key: str,
+    query: str,
+    include_recent_audit: bool = True,
+    simulated_role: str | None = None,
+) -> dict[str, Any]:
+    """Send an operational query to the assistant via FastAPI."""
+    try:
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+        payload = {
+            "query": query,
+            "include_recent_audit": include_recent_audit,
+            "simulated_role": simulated_role if simulated_role and simulated_role != "None" else None,
+        }
+        resp = requests.post(f"{api_url}/api/v1/assistant/chat", headers=headers, json=payload, timeout=12.0)
+        return {
+            "status_code": resp.status_code,
+            "success": resp.status_code == 200,
+            "data": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"detail": resp.text},
+        }
+    except Exception as e:
+        return {"status_code": 500, "success": False, "data": {"detail": str(e)}}
+
+
+def execute_assistant_action(
+    api_url: str,
+    api_key: str,
+    action_id: str,
+    confirmed: bool,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Approve and execute a proposed action with explicit admin confirmation."""
+    try:
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+        payload = {
+            "action_id": action_id,
+            "confirmed_by_admin": confirmed,
+            "reason": reason or "Confirmed via Streamlit Control Plane",
+        }
+        resp = requests.post(f"{api_url}/api/v1/assistant/actions/execute", headers=headers, json=payload, timeout=10.0)
+        return {
+            "status_code": resp.status_code,
+            "success": resp.status_code == 200,
+            "data": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"detail": resp.text},
+        }
+    except Exception as e:
+        return {"status_code": 500, "success": False, "data": {"detail": str(e)}}
+
+
 async def _record_audit_event(
     caller_id: str,
     caller_role: str,
@@ -395,13 +457,14 @@ st.markdown(
 )
 
 # Top Tabs
-tab_overview, tab_servers, tab_tools, tab_audit, tab_analytics, tab_security = st.tabs([
+tab_overview, tab_servers, tab_tools, tab_audit, tab_analytics, tab_security, tab_assistant = st.tabs([
     "📊 Gateway Overview",
     "🖥️ Upstream Servers",
     "🛠️ Tool Explorer & Runner",
     "📜 Execution Audit Trail",
     "📈 Telemetry & Statistics",
     "🔒 Security Guardrails",
+    "🤖 Gateway Assistant",
 ])
 
 # -----------------------------------------------------------------------------
@@ -990,6 +1053,172 @@ with tab_security:
             - **Pattern Scrubbing**: Redacts Bearer tokens, GitHub PATs (`ghp_`), and long hex strings across all inputs and errors.
             """
         )
+
+# -----------------------------------------------------------------------------
+# TAB 7: Gateway Assistant (Phase A, B & C)
+# -----------------------------------------------------------------------------
+with tab_assistant:
+    st.markdown("### 🤖 ToolBridge Operational Copilot & Governance Assistant")
+    st.markdown(
+        "Ask operational questions regarding tool capabilities, role permissions, recent failures, "
+        "and gateway configuration. Grounded strictly in live registry schemas, policies, and sanitized audit records."
+    )
+
+    # 1. Assistant Status Banner
+    asst_status = fetch_assistant_status(api_base_url, api_key_input)
+    status_cols = st.columns([2, 2, 2, 2])
+    with status_cols[0]:
+        prov_status = asst_status.get("status", "UNCONFIGURED") if asst_status else "OFFLINE"
+        status_color = "status-badge-ok" if prov_status in ("CONFIGURED", "OK") else "status-badge-err"
+        st.markdown(f"**Provider Status:** <span class='{status_color}'>{prov_status}</span>", unsafe_allow_html=True)
+    with status_cols[1]:
+        prov_name = asst_status.get("provider_name", "None") if asst_status else "FastAPI Offline"
+        st.markdown(f"**Adapter:** `{prov_name}`")
+    with status_cols[2]:
+        m_name = asst_status.get("model_name", "N/A") if asst_status else "N/A"
+        st.markdown(f"**Model:** `{m_name}`")
+    with status_cols[3]:
+        r_lim = asst_status.get("rate_limit_per_minute", 15) if asst_status else 15
+        st.markdown(f"**Rate Limit:** `{r_lim} req/min`")
+
+    st.markdown("---")
+
+    # 2. Controls & Phase B Role Simulation
+    ctrl_c1, ctrl_c2 = st.columns([1, 2])
+    with ctrl_c1:
+        sim_role = st.selectbox(
+            "Phase B: Simulate Caller Role",
+            ["None", "readonly", "operator", "admin"],
+            index=0,
+            help="Simulates access policies for a prospective caller without modifying actual permissions.",
+        )
+    with ctrl_c2:
+        inc_audit = st.checkbox("Include Recent Failure Logs in Grounding Context", value=True)
+
+    # Quick Prompts
+    st.markdown("**Quick Operational Queries:**")
+    qp_cols = st.columns(4)
+    quick_query = None
+    with qp_cols[0]:
+        if st.button("🔍 Why did write_file fail?"):
+            quick_query = "Why did my write_file call get blocked with a 403 Forbidden?"
+    with qp_cols[1]:
+        if st.button("🛠️ Which tool for PostgreSQL?"):
+            quick_query = "Which tool should an agent use to inspect database schemas and run queries?"
+    with qp_cols[2]:
+        if st.button("👥 Explain RBAC Tiers"):
+            quick_query = "Explain the difference between SAFE and SENSITIVE tools and how roles map to them."
+    with qp_cols[3]:
+        if st.button("⚡ Action: Reconnect Postgres"):
+            quick_query = "Please propose an action to reconnect the PostgreSQL upstream server."
+
+    # 3. Chat Session State
+    if "assistant_messages" not in st.session_state:
+        st.session_state["assistant_messages"] = [
+            {
+                "role": "assistant",
+                "content": (
+                    "👋 **Hello! I am your ToolBridge Operational Assistant.**\n\n"
+                    "I can help you understand tools, diagnose recent execution failures, explain RBAC policies, "
+                    "or simulate permissions for specific roles. How can I help you today?"
+                ),
+                "sources": [],
+                "proposed_actions": [],
+                "simulated_evaluation": None,
+            }
+        ]
+
+    # Render History
+    for msg in st.session_state["assistant_messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+            # Render Phase B Simulation Evaluation Card if present
+            if msg.get("simulated_evaluation"):
+                sim_data = msg["simulated_evaluation"]
+                with st.expander(f"👥 Phase B Access Profile: Role '{sim_data['simulated_role']}' ({sim_data['permitted_count']} allowed / {sim_data['restricted_count']} restricted)"):
+                    st.markdown(f"**Permitted Tools ({sim_data['permitted_count']}):**")
+                    for p_tool in sim_data["permitted_tools"]:
+                        st.markdown(f"- ✅ `{p_tool['tool_name']}` ({p_tool['sensitivity_tier']}): *{p_tool['reason']}*")
+                    if sim_data["restricted_tools"]:
+                        st.markdown(f"**Restricted Tools ({sim_data['restricted_count']}):**")
+                        for r_tool in sim_data["restricted_tools"]:
+                            st.markdown(f"- ⛔ `{r_tool['tool_name']}` ({r_tool['sensitivity_tier']}): *{r_tool['reason']}*")
+
+            # Render Phase C Proposed Actions Cards if present
+            if msg.get("proposed_actions"):
+                for act in msg["proposed_actions"]:
+                    st.info(f"### ⚡ Proposed Action (Phase C Human Approval Required)\n**{act['title']}**\n\n{act['description']}\n\n- **Target:** `{act.get('tool_name') or act.get('arguments', {}).get('server_id')}`\n- **Required Role:** `{act['requires_role']}`\n- **Status:** `{act['status']}`")
+                    if act["status"] == "PENDING":
+                        confirm_box = st.checkbox(f"I authorize execution of action '{act['action_id']}'", key=f"chk_{act['action_id']}")
+                        if st.button(f"Approve & Execute Action ({act['action_id']})", key=f"btn_{act['action_id']}"):
+                            if not confirm_box:
+                                st.error("Confirmation checkbox must be checked before execution.")
+                            else:
+                                with st.spinner("Executing approved action through gateway guards..."):
+                                    exec_resp = execute_assistant_action(
+                                        api_url=api_base_url,
+                                        api_key=api_key_input,
+                                        action_id=act["action_id"],
+                                        confirmed=confirm_box,
+                                    )
+                                    if exec_resp["success"]:
+                                        st.success(f"Action Executed: {exec_resp['data'].get('result')}")
+                                        act["status"] = "EXECUTED"
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Execution Failed ({exec_resp['status_code']}): {exec_resp['data'].get('detail')}")
+
+            # Render Grounding Sources
+            if msg.get("sources"):
+                with st.expander(f"📚 Verifiable Grounding Sources ({len(msg['sources'])})"):
+                    for src in msg["sources"]:
+                        st.markdown(f"- **`[{src['source_type']}] {src['identifier']}`**: {src['summary']}")
+
+    # Handle Chat Input or Quick Query
+    chat_prompt = quick_query or st.chat_input("Ask ToolBridge Assistant...")
+    if chat_prompt:
+        st.session_state["assistant_messages"].append({"role": "user", "content": chat_prompt})
+
+        with st.chat_message("user"):
+            st.markdown(chat_prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing gateway context & policies..."):
+                resp = send_assistant_chat(
+                    api_url=api_base_url,
+                    api_key=api_key_input,
+                    query=chat_prompt,
+                    include_recent_audit=inc_audit,
+                    simulated_role=sim_role if sim_role != "None" else None,
+                )
+
+                if resp["success"]:
+                    data = resp["data"]
+                    ans_text = data.get("answer", "")
+                    sources = data.get("sources", [])
+                    proposed = data.get("proposed_actions", [])
+                    sim_eval = data.get("simulated_evaluation")
+
+                    st.markdown(ans_text)
+                    st.session_state["assistant_messages"].append({
+                        "role": "assistant",
+                        "content": ans_text,
+                        "sources": sources,
+                        "proposed_actions": proposed,
+                        "simulated_evaluation": sim_eval,
+                    })
+                    st.rerun()
+                else:
+                    err_msg = f"⚠️ Assistant Error ({resp['status_code']}): {resp['data'].get('detail', 'Failed to reach assistant API.')}"
+                    st.error(err_msg)
+                    st.session_state["assistant_messages"].append({
+                        "role": "assistant",
+                        "content": err_msg,
+                        "sources": [],
+                        "proposed_actions": [],
+                        "simulated_evaluation": None,
+                    })
 
 
 def run_dashboard() -> None:

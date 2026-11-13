@@ -1,7 +1,7 @@
 """FastAPI dependency injection providers."""
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 from fastapi import Request
 
 from toolbridge.client.manager import MCPClientManager
@@ -28,3 +28,8 @@ def get_router(request: Request) -> ToolRouter:
 def get_rate_limiter(request: Request) -> SlidingWindowRateLimiter:
     """Retrieve shared SlidingWindowRateLimiter from FastAPI app state."""
     return cast(SlidingWindowRateLimiter, request.app.state.rate_limiter)
+
+
+def get_assistant_service(request: Request) -> Any:
+    """Retrieve shared AssistantService from FastAPI app state."""
+    return getattr(request.app.state, "assistant_service", None)

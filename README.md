@@ -97,6 +97,7 @@ flowchart TD
   - FastAPI management service with RBAC (`ADMIN`, `OPERATOR`, `READONLY`).
   - Interactive Streamlit dashboard with tool runner, live audit logs, and metrics.
   - Secret scrubbing redacting tokens and passwords before writing to SQLite.
+  - **Embedded Operational Copilot (ToolBridge Assistant)**: Grounded AI assistant in Streamlit and FastAPI for operational Q&A, Phase B access profile simulation, and Phase C human-approved action execution cards.
 
 ---
 
@@ -353,9 +354,9 @@ Run the full test suite:
 
 **Test Summary:**
 ```text
-======================= 180 passed in 81.41s =======================
+======================= 195 passed in 65.05s =======================
 ```
-*(All 180 tests pass with 0 skipped; symlink validation tests include mock fallbacks for non-elevated developer mode environments).*
+*(All 195 tests pass with 0 skipped; symlink validation tests include mock fallbacks for non-elevated developer mode environments).*
 
 ### Performance Benchmarking Suite
 

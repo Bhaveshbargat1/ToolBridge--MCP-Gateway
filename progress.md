@@ -101,3 +101,24 @@
 - [x] Complete test suite passing: **180 passed in 81.41s (100% green, 0 skipped)**
 - [x] Complete security suite passing: **102 passed in 7.75s**
 - [x] Ruff lint clean: **0 errors**
+
+### Phase 11: ToolBridge Operational Assistant & Governance Copilot (Phases A, B & C)
+- [x] **Phase A: Read-Only Operational Copilot**:
+  - Domain models & schemas (`AssistantChatRequest`, `AssistantChatResponse`, `SourceReference`, `ProviderStatus`)
+  - XML-delimited context builder grounded in `ServerRegistry`, `PolicyEngine`, and sanitized `AuditService` records
+  - Automated secret scrubbing via `SecretSanitizer` before prompt assembly
+  - Provider adapters: `OpenAICompatibleProvider`, `MockProvider`, and `DeterministicFallbackEngine`
+  - Authenticated FastAPI endpoints: `POST /api/v1/assistant/chat` (Operator/Admin) and `GET /api/v1/assistant/status`
+- [x] **Phase B: Per-Agent Access Profiles & Policy Simulation**:
+  - Live simulation of permissions for candidate roles (`readonly`, `operator`, `admin`) without altering system state
+  - Structured evaluation report highlighting permitted tools vs restricted tools
+- [x] **Phase C: Proposed Actions with Explicit Human Approval**:
+  - Proposal detection engine generating `ProposedAction` cards for safe operational actions (e.g. server reconnection, safe tool invocations)
+  - Dedicated approval endpoint `POST /api/v1/assistant/actions/execute` requiring `ADMIN` role and physical confirmation checkbox
+  - Full execution through gateway guards and audit logging; strictly zero autonomous execution
+- [x] **Streamlit Control Plane Integration**:
+  - Tab 7 `"🤖 Gateway Assistant"` in `src/toolbridge/dashboard/app.py`
+  - Status banner, quick operational prompt buttons, expandable grounding citations, Phase B role simulation cards, and Phase C action approval cards
+- [x] **Full Automated Test Coverage**:
+  - 15 dedicated unit and integration tests under `tests/assistant/`
+  - Total test suite status: **195 passed in 65.05s (100% green, 0 skipped)**

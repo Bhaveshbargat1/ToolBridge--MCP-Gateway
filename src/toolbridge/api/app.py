@@ -10,7 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from toolbridge.api.routes import audit, health, servers, tools
+from toolbridge.api.routes import assistant, audit, health, servers, tools
+from toolbridge.assistant.service import AssistantService
 from toolbridge.client.manager import MCPClientManager
 from toolbridge.client.registry import ServerRegistry
 from toolbridge.db.session import init_db
@@ -94,10 +95,12 @@ def create_app(
     )
 
     # Store shared singletons on app state
+    asst_service = AssistantService(registry=reg, router=rt, client_manager=mgr)
     app.state.registry = reg
     app.state.client_manager = mgr
     app.state.router = rt
     app.state.rate_limiter = limiter
+    app.state.assistant_service = asst_service
 
     # Exception Handlers
     @app.exception_handler(RateLimitExceededError)
@@ -113,6 +116,7 @@ def create_app(
     app.include_router(servers.router)
     app.include_router(tools.router)
     app.include_router(audit.router)
+    app.include_router(assistant.router)
 
     # Mount Static Web App Frontend
     static_dir = os.path.join(os.path.dirname(__file__), "static")
